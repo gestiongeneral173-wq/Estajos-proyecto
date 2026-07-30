@@ -40,7 +40,7 @@ export default function ReporteDiarioPage() {
           empleados: []
         }
       }
-      grupos[key].empleados.push(j.empleado)
+      grupos[key].empleados.push({ empleado: j.empleado, horas: j.horas, destajo: j.destajo })
     })
     return Object.values(grupos)
   }
@@ -90,13 +90,16 @@ export default function ReporteDiarioPage() {
                   <p className="text-xs text-gray-300">Vehículo: {grupo.vehiculo?.nombre ?? '—'}</p>
                 </div>
                 <div className="p-3 space-y-2">
-                  {grupo.empleados.map((emp, idx) => (
-                    <div key={idx} className="flex justify-between items-center border-b border-gray-100 pb-1 text-sm">
-                      <span className="text-navy-dark">{emp?.nombre ?? '—'}</span>
-                      <div className="flex gap-6 text-gray-600 text-xs">
-                        <span>{jornadas.find(j => j.empleado?.id === emp?.id)?.horas ?? 0}h</span>
-                        <span>€{jornadas.find(j => j.empleado?.id === emp?.id)?.destajo ?? 0}</span>
-                      </div>
+                  <div className="flex items-center pb-1 border-b border-gray-200 text-[10px] font-semibold text-gray-400 uppercase">
+                    <span className="flex-1">Empleados</span>
+                    <span className="w-12 text-right">Horas</span>
+                    <span className="w-16 text-right border-l border-gray-300 pl-3 ml-3">Destajo</span>
+                  </div>
+                  {grupo.empleados.map(({ empleado, horas, destajo }, idx) => (
+                    <div key={idx} className="flex items-center border-b border-gray-100 pb-1 text-sm">
+                      <span className="flex-1 text-navy-dark truncate">{empleado?.nombre ?? '—'}</span>
+                      <span className="w-12 text-right text-gray-600 text-xs">{horas ?? 0}h</span>
+                      <span className="w-16 text-right text-gray-600 text-xs border-l border-gray-300 pl-3 ml-3">€{destajo ?? 0}</span>
                     </div>
                   ))}
                 </div>
