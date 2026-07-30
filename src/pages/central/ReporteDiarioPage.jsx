@@ -35,8 +35,8 @@ export default function ReporteDiarioPage() {
       const key = `${j.encargado_id || 'sin-encargado'}-${j.vehiculo_id || 'sin-vehiculo'}`
       if (!grupos[key]) {
         grupos[key] = {
-          encargado: j.encargado ?? { id: null, nombre: 'Sin asignar' },
-          vehiculo: j.vehiculo ?? { id: null, nombre: 'Sin asignar' },
+          encargado: j.encargado ?? { id: null, nombre: 'Encargado despedido' },
+          vehiculo: j.vehiculo ?? { id: null, nombre: 'Vehículo dado de baja' },
           empleados: []
         }
       }

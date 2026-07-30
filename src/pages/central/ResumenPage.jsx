@@ -458,7 +458,7 @@ export default function ResumenPage() {
                         <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
                           {(itemsPorLista[l.id] ?? []).map((it) => (
                             <div key={it.id} className="flex justify-between text-[11px] text-navy-dark">
-                              <span>{it.empleado?.nombre ?? '—'}</span>
+                              <span>{it.empleado?.nombre ?? 'Empleado dado de baja'}</span>
                               <span className="font-semibold">€{Number(it.total_pagado).toFixed(2)}</span>
                             </div>
                           ))}
@@ -626,7 +626,7 @@ function ListaPagoImprimible({ lista, items, dias, printVisible }) {
             totalAdelantos += Number(it.total_adelantos)
             return (
               <tr key={it.id}>
-                <td className="border border-gray-300 p-1">{it.empleado?.nombre ?? '—'}</td>
+                <td className="border border-gray-300 p-1">{it.empleado?.nombre ?? 'Empleado dado de baja'}</td>
                 {dias.map((d) => {
                   const j = porDia[d.iso]
                   return (
