@@ -159,7 +159,12 @@ export async function getItemsListaPagoConJornadas(listaId) {
   const items = await getItemsListaPago(listaId)
   return Promise.all(items.map(async (it) => ({
     ...it,
-    jornadas: await getJornadasTrabajadorPorPeriodo(it.empleado.id, lista.periodo_inicio, lista.periodo_fin),
+    // it.empleado puede venir null si el empleado fue eliminado — sin este
+    // guard, un solo empleado borrado tumbaba el Promise.all completo y la
+    // lista entera dejaba de mostrarse (aunque el resto de items sí tenía datos).
+    jornadas: it.empleado
+      ? await getJornadasTrabajadorPorPeriodo(it.empleado.id, lista.periodo_inicio, lista.periodo_fin)
+      : [],
   })))
 }
 

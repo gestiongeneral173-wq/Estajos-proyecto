@@ -196,8 +196,10 @@ export default function ResumenPage() {
       setSeleccionados(new Set())
       setEncargadoNombre('')
       setModoLista('idle')
-      // Recargar ciclo (los pagados salen del selector) y el historial.
-      await Promise.all([cargarListas(), cargarCiclo()])
+      // Recargar ciclo (los pagados salen del selector), el historial y el
+      // KPI de "Resumen General" — antes se quedaba con el monto viejo
+      // hasta refrescar la página entera.
+      await Promise.all([cargarListas(), cargarCiclo(), getResumenPagos().then(setStats)])
     } catch (err) { setGenError(err.message) }
     finally { setGenerando(false) }
   }

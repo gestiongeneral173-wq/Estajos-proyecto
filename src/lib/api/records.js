@@ -216,17 +216,24 @@ export async function getResumenGlobal() {
 
 export async function getResumenPagos() {
   // Devengado pendiente por ciclo (quincenal/mensual), sumando el trabajo de
-  // empleados normales y el propio de los encargados.
-  const [emp, enc] = await Promise.all([
+  // empleados normales y el propio de los encargados, neto de adelantos
+  // pendientes — mismo criterio que calcular_baja_empleado (workers.js) y
+  // que totalPagar en la Lista de Pago: sin restar adelantos esto mostraba
+  // el devengado BRUTO, inflado respecto a lo que realmente se paga.
+  const [emp, enc, adelantos] = await Promise.all([
     supabase.from('jornada_empleado')
       .select('horas_trabajadas, pago_destajo, tarifa_aplicada, empleado:empleado_id(tipo_pago, pago_x_hora)')
       .eq('fue_liquidado', false),
     supabase.from('jornada_encargado')
       .select('horas_trabajadas, pago_destajo, tarifa_aplicada, encargado:encargado_id(tipo_pago, pago_x_hora)')
       .eq('fue_liquidado', false),
+    supabase.from('adelanto_empleado')
+      .select('monto, empleado:empleado_id(tipo_pago)')
+      .eq('fue_liquidado', false),
   ])
   if (emp.error) throw new Error(emp.error.message)
   if (enc.error) throw new Error(enc.error.message)
+  if (adelantos.error) throw new Error(adelantos.error.message)
 
   const resumen = { quincenal: 0, mensual: 0 }
   const sumar = (rows, joinKey) => {
@@ -241,6 +248,13 @@ export async function getResumenPagos() {
   }
   sumar(emp.data, 'empleado')
   sumar(enc.data, 'encargado')
+
+  adelantos.data?.forEach((a) => {
+    const tipo = a.empleado?.tipo_pago
+    if (tipo === 'quincenal') resumen.quincenal -= Number(a.monto || 0)
+    else if (tipo === 'mensual') resumen.mensual -= Number(a.monto || 0)
+  })
+
   return resumen
 }
 
