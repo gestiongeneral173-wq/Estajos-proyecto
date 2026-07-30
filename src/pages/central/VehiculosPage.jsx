@@ -204,6 +204,10 @@ export default function VehiculosPage() {
   useEffect(() => { cargar() }, [cargar])
 
   // ── Rotación automática de PINs vencidos (Corregido sin bucle) ──
+  // Redundancia: desde 2026-07-30 el cron `rotar-pins-furgoneta` ya
+  // garantiza la rotación diaria sin depender de que esta pantalla esté
+  // abierta. Este mecanismo queda como respaldo inofensivo — cuando el
+  // cron ya rotó, este chequeo no encuentra vencidos y no hace nada.
   useEffect(() => {
     const WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -217,7 +221,9 @@ export default function VehiculosPage() {
         })
 
         if (vencidos.length > 0) {
-          Promise.all(vencidos.map((v) => rotarPinVehiculo(v.id).catch(() => {})))
+          Promise.all(vencidos.map((v) => rotarPinVehiculo(v.id).catch((err) => {
+            console.error(`No se pudo rotar el PIN de la furgoneta ${v.id}:`, err)
+          })))
             .then(() => {
               if (mountedRef.current) cargar()
             })
@@ -287,7 +293,7 @@ export default function VehiculosPage() {
 /* ─── Modal crear vehículo ─── */
 function ModalVehiculo({ open, onClose, onSaved }) {
   const [form, setForm] = useState({
-    nombre: '', matricula: '', tarifa_plaza: '', tipo_pago: 'quincenal', pin_actual: ''
+    nombre: '', matricula: '', tarifa_plaza: '', tipo_pago: 'quincenal'
   })
   const [error, setError]   = useState(null)
   const [saving, setSaving] = useState(false)
@@ -303,9 +309,8 @@ function ModalVehiculo({ open, onClose, onSaved }) {
         tipo_pago: form.tipo_pago
       }
       if (form.matricula.trim()) payload.matricula = form.matricula.trim()
-      if (form.pin_actual.trim()) payload.pin_actual = form.pin_actual.trim()
       await crearVehiculo(payload)
-      setForm({ nombre: '', matricula: '', tarifa_plaza: '', tipo_pago: 'quincenal', pin_actual: '' })
+      setForm({ nombre: '', matricula: '', tarifa_plaza: '', tipo_pago: 'quincenal' })
       onSaved()
     } catch (err) { setError(err.message) } finally { setSaving(false) }
   }
@@ -328,8 +333,6 @@ function ModalVehiculo({ open, onClose, onSaved }) {
             <option value="mensual">Mensual</option>
           </select>
         </div>
-        <Input label="PIN (4 díg, opcional — aleatorio si vacío)" value={form.pin_actual}
-          onChange={set('pin_actual')} maxLength={4} />
         <Button variant="primary" onClick={handleSave} disabled={saving || !form.nombre || !tarifaValida}>
           {saving ? 'GUARDANDO…' : 'GUARDAR'}
         </Button>

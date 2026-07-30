@@ -123,7 +123,6 @@ export default function VehiculoDetallePage() {
         tarifa_plaza: veh.tarifa_plaza,
         tipo_pago: veh.tipo_pago ?? 'quincenal',
         propietario: veh.propietario ?? '',
-        pin_actual: veh.pin_actual ?? '',
       })
 
       // Cambio 1.5.4 (Octava llamada) + Migración 009: "Historial de Días"
@@ -191,7 +190,6 @@ export default function VehiculoDetallePage() {
         tarifa_plaza: parseFloat(formEdit.tarifa_plaza) || 0,
         tipo_pago: formEdit.tipo_pago,
         propietario: formEdit.propietario?.trim() || null,
-        pin_actual: formEdit.pin_actual?.trim() || vehiculo.pin_actual,
       })
       await cargar()
       setEditando(false)

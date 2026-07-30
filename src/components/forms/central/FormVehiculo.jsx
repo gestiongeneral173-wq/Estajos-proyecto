@@ -72,12 +72,6 @@ export default function FormVehiculo({
         value={values.propietario}
         onChange={onChange('propietario')}
       />
-      <Input
-        label="PIN (4 díg, opcional — aleatorio si vacío)"
-        value={values.pin_actual}
-        onChange={onChange('pin_actual')}
-        maxLength={4}
-      />
 
       <Button
         variant="primary"
