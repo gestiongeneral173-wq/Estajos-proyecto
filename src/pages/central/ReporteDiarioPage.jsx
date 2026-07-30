@@ -32,7 +32,7 @@ export default function ReporteDiarioPage() {
   const agruparJornadas = (jornadas) => {
     const grupos = {}
     jornadas.forEach(j => {
-      const key = `${j.encargado_id || 'sin-encargado'}-${j.vehiculo_id || 'sin-vehiculo'}`
+      const key = `${j.encargado?.id || 'sin-encargado'}-${j.vehiculo?.id || 'sin-vehiculo'}`
       if (!grupos[key]) {
         grupos[key] = {
           encargado: j.encargado ?? { id: null, nombre: 'Encargado despedido' },
