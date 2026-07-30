@@ -299,7 +299,12 @@ export default function TrabajadorDetallePage() {
   }
 
   const fmtEur  = (v) => `€${Number(v ?? 0).toFixed(2)}`
-  const fmtDate = (s) => s ? new Date(s).toLocaleDateString('es-ES') : '—'
+  // Fechas simples ("2026-07-27", sin hora) se interpretan como medianoche
+  // UTC si se le pasan tal cual a `new Date()`, y en una zona horaria
+  // detrás de UTC (México) eso muestra el día ANTERIOR. Forzamos hora local
+  // agregando 'T00:00:00' solo cuando el string no la trae ya (los
+  // `created_at` sí vienen con hora y zona, y no necesitan este ajuste).
+  const fmtDate = (s) => s ? new Date(/T/.test(s) ? s : `${s}T00:00:00`).toLocaleDateString('es-ES') : '—'
 
   /* ─── Loading ─── */
   if (loading) {

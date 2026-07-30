@@ -22,8 +22,12 @@ import {
 //IMPORTACIÓN IMPORTANTE:  Direccion de constants.js : Para el uso de direcciones
 import { Direccion } from '../../utils/constants.js'
 
+// Fechas simples ("2026-07-27", sin hora) se interpretan como medianoche
+// UTC si se le pasan tal cual a `new Date()`, y en una zona horaria detrás
+// de UTC (México) eso muestra el día ANTERIOR. Forzamos hora local
+// agregando 'T00:00:00' cuando el string no la trae ya.
 const fmtCorta = (s) =>
-  new Date(s).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: '2-digit' })
+  new Date(/T/.test(s) ? s : `${s}T00:00:00`).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: '2-digit' })
 
 const CICLO_BADGE = {
   quincenal: 'bg-purple-50 text-purple-600',

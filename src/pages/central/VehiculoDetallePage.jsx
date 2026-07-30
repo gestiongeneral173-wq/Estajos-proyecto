@@ -47,8 +47,13 @@ function tipoCiclo(inicio, fin) {
   if (dias <= 16) return 'Quincenal'
   return 'Mensual'
 }
+// Fechas simples ("2026-07-27", sin hora) se interpretan como medianoche
+// UTC si se le pasan tal cual a `new Date()`, y en una zona horaria detrás
+// de UTC (México) eso muestra el día ANTERIOR. Forzamos hora local
+// agregando 'T00:00:00' cuando el string no la trae ya.
+const fechaSegura = (s) => new Date(/T/.test(s) ? s : `${s}T00:00:00`)
 const fmtCorta = (s) =>
-  new Date(s).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: '2-digit' })
+  fechaSegura(s).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: '2-digit' })
 
 export default function VehiculoDetallePage() {
   const navigate = useNavigate()
@@ -497,7 +502,7 @@ export default function VehiculoDetallePage() {
               </div>
               {diasVehiculo.map(d => (
                 <div key={d.id} className="grid grid-cols-5 gap-2 p-2 border-t border-gray-100 text-xs text-navy-dark items-center">
-                  <span>{new Date(d.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}</span>
+                  <span>{fechaSegura(d.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}</span>
                   <span className="truncate">{d.encargado?.nombre ?? '—'}</span>
                   {editandoDiaId === d.id ? (
                     <input

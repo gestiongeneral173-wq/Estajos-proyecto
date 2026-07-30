@@ -80,7 +80,9 @@ input[type="number"] {
   .input-base {
     @apply w-full mt-1.5 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl
            text-sm text-navy-dark placeholder-gray-400
-           focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent;
+           focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent
+           disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-100
+           disabled:cursor-not-allowed;
     transition: background-color 150ms var(--ease-out),
                 border-color 150ms var(--ease-out),
                 box-shadow 150ms var(--ease-out);

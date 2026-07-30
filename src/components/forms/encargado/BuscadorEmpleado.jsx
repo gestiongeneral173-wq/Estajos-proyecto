@@ -47,22 +47,28 @@ export default function BuscadorEmpleado({ empleados = [], onSelect, loading = f
             // en 0 (Incompleto — se puede completar), o ambos con valor
             // (Completo — solo lectura). Siempre seleccionable.
             const estado = e.completo ? 'Completo' : e.registrado ? 'Incompleto' : 'Pendiente'
+            // Las completas se ven visualmente distintas (tinte verde,
+            // texto atenuado) para que no se confundan con las que sí
+            // admiten edición — evita que el encargado piense que está
+            // por modificar una jornada que en realidad es de solo lectura.
             return (
               <button
                 key={e.id}
                 type="button"
                 onClick={() => onSelect(e)}
-                className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left transition-colors bg-gray-50 hover:bg-primary/10 active:scale-97"
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left transition-colors active:scale-97 ${
+                  e.completo ? 'bg-green-50 hover:bg-green-100' : 'bg-gray-50 hover:bg-primary/10'
+                }`}
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold truncate text-navy-dark">
+                  <p className={`text-sm font-semibold truncate ${e.completo ? 'text-gray-400' : 'text-navy-dark'}`}>
                     {e.nombre}
                   </p>
-                  <p className="text-[10px] text-gray-400">
+                  <p className={`text-[10px] ${e.completo ? 'text-primary font-semibold' : 'text-gray-400'}`}>
                     {estado}
                   </p>
                 </div>
-                {e.completo && <Check className="w-4 h-4 text-gray-400 flex-shrink-0" />}
+                {e.completo && <Check className="w-4 h-4 text-primary flex-shrink-0" />}
               </button>
             )
           })}

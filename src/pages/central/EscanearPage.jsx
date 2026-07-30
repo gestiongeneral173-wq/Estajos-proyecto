@@ -321,7 +321,7 @@ function SeccionAdelanto({ trabajador, adelantos, onSaved, onBack }) {
         ) : (
           adelantos.map((a) => (
             <div key={a.id} className="grid grid-cols-2 p-2 border-t border-gray-100 text-xs text-navy-dark">
-              <span>{new Date(a.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}</span>
+              <span>{new Date(/T/.test(a.fecha) ? a.fecha : `${a.fecha}T00:00:00`).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}</span>
               <span className="text-right font-semibold">€{Number(a.monto).toFixed(2)}</span>
             </div>
           ))
@@ -384,7 +384,7 @@ function SeccionPagar({ trabajador, periodo, jornadas, totalDias, totalAdelantos
           <p className="text-gray-400 text-xs text-center py-3">Sin días pendientes en este ciclo.</p>
         ) : jornadas.map((j) => (
           <div key={j.id} className="grid grid-cols-4 gap-2 p-2 border-t border-gray-100 text-xs text-navy-dark">
-            <span>{new Date(j.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}</span>
+            <span>{new Date(/T/.test(j.fecha) ? j.fecha : `${j.fecha}T00:00:00`).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}</span>
             <span>{j.horas}</span>
             <span>€{j.destajo}</span>
             <span className="text-right font-semibold">€{(j.horas * trabajador.tarifa_hora + Number(j.destajo)).toFixed(2)}</span>

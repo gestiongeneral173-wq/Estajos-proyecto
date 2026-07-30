@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, Check, UserCircle, Clock, UserPlus, Calendar, Search, ChevronDown, ChevronUp, Users } from 'lucide-react'
+import { LogOut, Check, UserCircle, Clock, UserPlus, Calendar, Search, ChevronDown, ChevronUp, Users, Lock } from 'lucide-react'
 
 import Header          from '../../components/layout/Header.jsx'
 import Card            from '../../components/ui/Card.jsx'
@@ -494,9 +494,15 @@ export default function SeccionEncargadoPage() {
           </Card>
         )}
 
-        {/* ── VER (empleado con ambos campos ya llenos, solo lectura) ── */}
+        {/* ── VER (empleado con ambos campos ya llenos, solo lectura) ──
+            Tarjeta con tinte verde + etiqueta "solo lectura", para que se
+            note a simple vista que aquí no hay nada que modificar. */}
         {modo === 'ver' && trabajador && !exito && (
-          <Card>
+          <Card className="!bg-green-50">
+            <div className="flex items-center gap-1.5 mb-3 px-2.5 py-1 bg-white/70 rounded-full w-fit">
+              <Lock className="w-3 h-3 text-primary" />
+              <span className="text-[9px] font-semibold text-primary uppercase">Solo lectura — jornada completa</span>
+            </div>
             <div className="flex items-center gap-3 mb-4">
               <CircleIcon icon={UserCircle} size="md" />
               <div>
@@ -564,7 +570,11 @@ export default function SeccionEncargadoPage() {
 
         {/* ── SELF-VER (día pasado, ambos campos ya llenos) ── */}
         {modo === 'self-ver' && !exito && (
-          <Card>
+          <Card className="!bg-green-50">
+            <div className="flex items-center gap-1.5 mb-3 px-2.5 py-1 bg-white/70 rounded-full w-fit">
+              <Lock className="w-3 h-3 text-primary" />
+              <span className="text-[9px] font-semibold text-primary uppercase">Solo lectura — jornada completa</span>
+            </div>
             <div className="flex items-center gap-3 mb-4">
               <CircleIcon icon={UserCircle} size="md" />
               <div>
