@@ -115,18 +115,23 @@ export async function getTrabajadorPorId(id) {
   })
 }
 
+// Traduce errores crudos de Postgres a mensajes legibles. Defensa en
+// profundidad: los formularios ya bloquean esto del lado del cliente, esto
+// cubre cualquier otra vía que llegue directo a la tabla.
+function traducirErrorEmpleado(error) {
+  if (error.code === '23505' || error.message?.includes('empleados_telefono_key')) {
+    return new Error('Ya existe un trabajador registrado con este número de teléfono.')
+  }
+  if (error.code === '23514' || error.message?.includes('pago_x_hora')) {
+    return new Error('La tarifa por hora debe ser mayor a 0.')
+  }
+  return new Error(error.message)
+}
+
 export async function crearTrabajador(payload) {
   const { data, error } = await supabase
     .from('empleados').insert(aColumnasV6(payload)).select(SELECT_EMPLEADO).single()
-  if (error) {
-    // Código 23505 = unique_violation de Postgres. Se traduce el mensaje
-    // crudo de la constraint "empleados_telefono_key" a algo legible; para
-    // cualquier otro error se conserva el mensaje original sin modificar.
-    if (error.code === '23505' || error.message?.includes('empleados_telefono_key')) {
-      throw new Error('Ya existe un trabajador registrado con este número de teléfono.')
-    }
-    throw new Error(error.message)
-  }
+  if (error) throw traducirErrorEmpleado(error)
   return conActivo(data)
 }
 
@@ -137,7 +142,7 @@ export async function actualizarTrabajador(id, datos) {
     .eq('id', id)
     .select(SELECT_EMPLEADO)
     .single()
-  if (error) throw new Error(error.message)
+  if (error) throw traducirErrorEmpleado(error)
   return conActivo(data)
 }
 
@@ -186,4 +191,32 @@ export async function getBalanceTrabajador(id) {
     .rpc('calcular_balance_trabajador', { p_empleado_id: id })
   if (error) throw new Error(error.message)
   return Number(data) || 0
+}
+
+/**
+ * Tarifa inicial de autoregistro (configuracion_empleado, fila única).
+ * La usa `registrar_trabajador_con_pin` del lado del servidor — esto solo
+ * la lee/edita para la pantalla de configuración en Central.
+ */
+export async function getConfiguracionEmpleado() {
+  const { data, error } = await supabase
+    .from('configuracion_empleado')
+    .select('id, tarifa_hora_inicial, updated_at')
+    .limit(1)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  return data
+}
+
+export async function actualizarTarifaInicial(tarifaHoraInicial) {
+  const config = await getConfiguracionEmpleado()
+  if (!config) throw new Error('No existe configuración inicial de empleados.')
+  const { data, error } = await supabase
+    .from('configuracion_empleado')
+    .update({ tarifa_hora_inicial: tarifaHoraInicial, updated_at: new Date().toISOString() })
+    .eq('id', config.id)
+    .select('id, tarifa_hora_inicial, updated_at')
+    .single()
+  if (error) throw new Error(error.message)
+  return data
 }

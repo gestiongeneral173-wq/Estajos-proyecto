@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, Plus, Search, KeyRound, Copy } from 'lucide-react'
+import { LogOut, Plus, Search, KeyRound, Copy, Settings } from 'lucide-react'
 
 import Header         from '../../components/layout/Header.jsx'
 import HorizontalNav  from '../../components/layout/HorizontalNav.jsx'
@@ -14,7 +14,10 @@ import FormTrabajador from '../../components/forms/central/FormTrabajador.jsx'
 
 import { useAuthStore } from '../../store/authStore.js'
 import { logout }       from '../../lib/api/auth.js'
-import { listarTrabajadores, crearTrabajador, getBalanceTrabajador } from '../../lib/api/workers.js'
+import {
+  listarTrabajadores, crearTrabajador, getBalanceTrabajador,
+  getConfiguracionEmpleado, actualizarTarifaInicial,
+} from '../../lib/api/workers.js'
 import { generarPinRegistro } from '../../lib/api/auth.js'
 
 // IMPORTACIÓN IMPORTANTE: Direccion de constants.js : Para el uso de direcciones
@@ -144,12 +147,44 @@ export default function TrabajadoresPage() {
   )
 }
 
-/* ─── Modal generar PIN de registro (Cambio #7 / optimizado en 1.3.1.1) ─── */
+/* ─── Modal generar PIN de registro (Cambio #7 / optimizado en 1.3.1.1) ───
+   Incluye la tarifa inicial de autoregistro arriba del todo — vive aquí
+   porque es la misma configuración que usa este flujo (registrar_trabajador
+   _con_pin la lee al crear al empleado), así el admin la ve/ajusta justo
+   antes de generar el código, sin tener que acordarse de otra pantalla. */
 function ModalPinRegistro({ open, onClose }) {
   const [cupo, setCupo]     = useState('')
   const [pin, setPin]       = useState(null)
   const [error, setError]   = useState(null)
   const [saving, setSaving] = useState(false)
+
+  const [tarifa, setTarifa]                 = useState('')
+  const [cargandoTarifa, setCargandoTarifa] = useState(false)
+  const [editandoTarifa, setEditandoTarifa] = useState(false)
+  const [savingTarifa, setSavingTarifa]     = useState(false)
+  const [tarifaError, setTarifaError]       = useState(null)
+  const [tarifaGuardada, setTarifaGuardada] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setCargandoTarifa(true); setTarifaError(null)
+    getConfiguracionEmpleado()
+      .then((c) => setTarifa(c ? String(c.tarifa_hora_inicial) : ''))
+      .catch((err) => setTarifaError(err.message))
+      .finally(() => setCargandoTarifa(false))
+  }, [open])
+
+  const tarifaValida = parseFloat(tarifa) > 0
+
+  const handleGuardarTarifa = async () => {
+    setTarifaError(null); setSavingTarifa(true)
+    try {
+      await actualizarTarifaInicial(parseFloat(tarifa))
+      setEditandoTarifa(false)
+      setTarifaGuardada(true)
+      setTimeout(() => setTarifaGuardada(false), 1500)
+    } catch (err) { setTarifaError(err.message) } finally { setSavingTarifa(false) }
+  }
 
   const handleGenerar = async () => {
     setError(null); setSaving(true)
@@ -159,7 +194,7 @@ function ModalPinRegistro({ open, onClose }) {
     } catch (err) { setError(err.message) } finally { setSaving(false) }
   }
 
-  const reset = () => { setCupo(''); setPin(null); setError(null) }
+  const reset = () => { setCupo(''); setPin(null); setError(null); setEditandoTarifa(false) }
 
   return (
     // Cambio 1.3.1.1 (Octava llamada): título y explicación optimizados —
@@ -168,6 +203,49 @@ function ModalPinRegistro({ open, onClose }) {
     // desactiva solo al agotarse, sin intervención manual del admin.
     <Modal open={open} title="Generar código de registro para nuevos empleados" onClose={() => { reset(); onClose() }}>
       <div className="space-y-4">
+        {/* Tarifa inicial — recordatorio + edición rápida antes de generar
+            el código, para que no ocurra el error de generarlo sin revisar
+            a cuánto quedará pagado el que se autoregistre. */}
+        <div className="bg-gray-50 rounded-xl p-3">
+          {tarifaError && <p className="text-danger text-[10px] mb-2">{tarifaError}</p>}
+          {tarifaGuardada && <p className="text-primary text-[10px] mb-2">Tarifa actualizada.</p>}
+          {cargandoTarifa ? (
+            <p className="text-gray-400 text-xs">Cargando tarifa inicial…</p>
+          ) : editandoTarifa ? (
+            <div className="space-y-2">
+              <Input
+                label="Tarifa por hora (€)"
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={tarifa}
+                onChange={(e) => setTarifa(e.target.value)}
+              />
+              {tarifa !== '' && !tarifaValida && (
+                <p className="text-danger text-[10px]">Debe ser mayor a 0.</p>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="outline" onClick={() => setEditandoTarifa(false)} disabled={savingTarifa}>
+                  CANCELAR
+                </Button>
+                <Button variant="primary" onClick={handleGuardarTarifa} disabled={savingTarifa || !tarifaValida}>
+                  {savingTarifa ? 'GUARDANDO…' : 'GUARDAR'}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-[9px] text-gray-400 uppercase">Tarifa inicial de autoregistro</p>
+                <p className="text-sm font-bold text-navy-dark">€{Number(tarifa || 0).toFixed(2)}/h</p>
+              </div>
+              <button onClick={() => setEditandoTarifa(true)} className="text-gray-400 hover:text-navy-dark">
+                <Settings className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+        </div>
+
         {error && <p className="text-danger text-xs">{error}</p>}
 
         {!pin ? (

@@ -31,14 +31,15 @@ export default function FormTrabajador({
   const nombreValido   = NOMBRE_RE.test(nombre.trim())   && nombre.trim().length >= 4
   const apellidoValido = NOMBRE_RE.test(apellido.trim()) && apellido.trim().length >= 4
   const telefonoValido = values.telefono?.length === 10
+  const tarifaValida   = parseFloat(values.tarifa_hora) > 0
 
   const actualizarNombreCompleto = (n, a) => {
     onChange('nombre')({ target: { value: `${n.trim()} ${a.trim()}` } })
   }
 
   const canSubmit = modo === 'crear'
-    ? nombreValido && apellidoValido && telefonoValido
-    : telefonoValido
+    ? nombreValido && apellidoValido && telefonoValido && tarifaValida
+    : telefonoValido && tarifaValida
 
   return (
     <div className="space-y-3">
@@ -99,9 +100,14 @@ export default function FormTrabajador({
       <Input
         label="Tarifa por hora (€)"
         type="number"
+        min="0.01"
+        step="0.01"
         value={values.tarifa_hora}
         onChange={onChange('tarifa_hora')}
       />
+      {values.tarifa_hora !== '' && !tarifaValida && (
+        <p className="text-danger text-[11px] -mt-2">La tarifa por hora debe ser mayor a 0.</p>
+      )}
 
       {/* Cambio 1.3.1.2 / 1.3.5 (Octava llamada): campo "Tarifa destajo"
           eliminado por completo, tanto al añadir como al editar un
@@ -119,7 +125,7 @@ export default function FormTrabajador({
           <Button
             variant="primary"
             onClick={onSubmit}
-            disabled={saving}
+            disabled={saving || !canSubmit}
           >
             {saving ? 'GUARDANDO…' : 'GUARDAR'}
           </Button>
