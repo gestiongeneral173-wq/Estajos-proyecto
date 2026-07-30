@@ -77,7 +77,7 @@ export default function EscanearPage() {
       const periodo = calcularPeriodo(t)
       const [jorn, adel, pago] = await Promise.all([
         getJornadasTrabajadorPorPeriodo(t.id, periodo.inicio, periodo.fin),
-        getAdelantosPendientes(t.id),
+        getAdelantosPendientes(t.id, periodo.inicio, periodo.fin),
         getPagoPorPeriodo(t.id, periodo.inicio, periodo.fin),
       ])
       setTrabajador(t)

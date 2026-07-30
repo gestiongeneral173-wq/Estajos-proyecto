@@ -136,10 +136,13 @@ export async function actualizarJornadaTrabajador(jornadaId, { horas, destajo, f
     .from(tabla)
     .update(cambios)
     .eq('id', jornadaId)
+    .eq('fue_liquidado', false)
     .select()
-    .single()
   if (error) throw new Error(error.message)
-  return data
+  if (!data || data.length === 0) {
+    throw new Error('Esta jornada ya fue liquidada y no se puede editar.')
+  }
+  return data[0]
 }
 
 /* ─── Adelantos a trabajadores ─────────────────────────── */
@@ -382,12 +385,18 @@ export async function getHistorialPagosVehiculo(vehiculoId, retentionDays = 60) 
   return (data ?? []).map(mapPago)
 }
 
-export async function getAdelantosPendientes(empleadoId) {
+// H-09 (2026-07-29): filtrado por fecha de ciclo, igual que ejecutar_pago_
+// empleado en la BD — antes traía todos los adelantos pendientes sin
+// importar su fecha, y la planilla/Escanear restaban un total que la RPC
+// nunca iba a descontar en su totalidad.
+export async function getAdelantosPendientes(empleadoId, fechaInicio, fechaFin) {
   const { data, error } = await supabase
     .from('adelanto_empleado')
     .select('id, monto, fecha_adelanto, fue_liquidado, created_at')
     .eq('empleado_id', empleadoId)
     .eq('fue_liquidado', false)
+    .gte('fecha_adelanto', fechaInicio)
+    .lte('fecha_adelanto', fechaFin)
     .order('fecha_adelanto', { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []).map(mapAdelanto)

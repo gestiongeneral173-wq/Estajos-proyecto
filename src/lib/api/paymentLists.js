@@ -48,7 +48,7 @@ export async function getDatosCicloParaPago(ciclo) {
     empleados.map(async (e) => {
       const [jornadas, adelantos] = await Promise.all([
         getJornadasTrabajadorPorPeriodo(e.id, periodo.inicio, periodo.fin),
-        getAdelantosPendientes(e.id),
+        getAdelantosPendientes(e.id, periodo.inicio, periodo.fin),
       ])
       const totalHoras   = jornadas.reduce((s, j) => s + Number(j.horas), 0)
       // Cada jornada usa SU tarifa (snapshot al crearse), no la tarifa
@@ -76,9 +76,11 @@ export async function getDatosCicloParaPago(ciclo) {
 
 // Genera la lista y ejecuta el pago en un solo paso (Cambio Décima: sin
 // estado pendiente). Registra el `encargado` (texto libre) que reparte el
-// efectivo, congela los montos en `listas_pago_items` y dispara
-// `ejecutarPago` por cada empleado (cierra sus jornadas y descuenta los
-// adelantos del ciclo).
+// efectivo y dispara `ejecutarPago` por cada empleado (cierra sus jornadas y
+// descuenta los adelantos del ciclo) **antes** de grabar `lista_pago_detalle`,
+// usando el `total_pagado` que la RPC realmente liquidó — no el cálculo
+// hecho en el navegador, que podía divergir (un adelanto registrado un
+// segundo antes del clic, una jornada que entró en el ínterin).
 //
 // No es atómico entre items: si un pago falla a la mitad, los anteriores ya
 // quedaron liquidados y la lista queda registrada — se informa el error para
@@ -89,7 +91,17 @@ export async function generarListaPago({ ciclo, periodo, items, encargado }) {
   if (!items.length) throw new Error('Selecciona al menos un empleado.')
   if (!encargado || !encargado.trim()) throw new Error('Ingresa el nombre del encargado.')
 
-  const totalMonto = items.reduce((s, i) => s + i.totalPagar, 0)
+  const liquidados = []
+  for (const i of items) {
+    const pago = await ejecutarPago({
+      empleadoId: i.empleadoId,
+      periodoInicio: periodo.inicio,
+      periodoFin: periodo.fin,
+    })
+    liquidados.push({ ...i, totalPagar: pago.total_pagado })
+  }
+
+  const totalMonto = liquidados.reduce((s, i) => s + i.totalPagar, 0)
 
   const { data: lista, error: errLista } = await supabase
     .from('lista_pago_quincenal')
@@ -105,7 +117,7 @@ export async function generarListaPago({ ciclo, periodo, items, encargado }) {
 
   const { error: errItems } = await supabase
     .from('lista_pago_detalle')
-    .insert(items.map((i) => ({
+    .insert(liquidados.map((i) => ({
       lista_pago_quincenal_id: lista.id,
       empleado_id: i.empleadoId,
       total_devengado: i.totalDevengado,
@@ -113,15 +125,6 @@ export async function generarListaPago({ ciclo, periodo, items, encargado }) {
       monto_incluido: i.totalPagar,
     })))
   if (errItems) throw new Error(errItems.message)
-
-  // Pago inmediato de cada empleado de la lista.
-  for (const i of items) {
-    await ejecutarPago({
-      empleadoId: i.empleadoId,
-      periodoInicio: periodo.inicio,
-      periodoFin: periodo.fin,
-    })
-  }
 
   return lista
 }
