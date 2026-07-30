@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, Check, UserCircle, Clock, UserPlus, Calendar, Search, ChevronDown, ChevronUp, Users, Lock } from 'lucide-react'
+import { LogOut, Check, UserCircle, Clock, UserPlus, Calendar, Search, ChevronDown, ChevronUp, Users, Lock, Truck } from 'lucide-react'
 
 import Header          from '../../components/layout/Header.jsx'
 import Card            from '../../components/ui/Card.jsx'
@@ -18,6 +18,7 @@ import {
   buscarEmpleadosEncargado, estadoJornadaPropiaEncargado,
   corregirJornadaEmpleado, corregirJornadaEncargado,
   buscarJornadasFurgonetaDia, buscarTemporalesFurgonetaDia,
+  misFurgonetasHoy,
 } from '../../lib/api/records.js'
 
 import { Direccion } from '../../utils/constants.js'
@@ -65,7 +66,7 @@ function Collapsible({ title, color = 'green', children, defaultOpen = false }) 
 
 export default function SeccionEncargadoPage() {
   const navigate = useNavigate()
-  const { userId, nombre, vehiculoActivoId, vehiculoActivoNombre, rol, clear, tokenTurno } = useAuthStore()
+  const { userId, nombre, telefono, vehiculoActivoId, vehiculoActivoNombre, rol, clear, tokenTurno } = useAuthStore()
 
   const hoy = new Date().toISOString().slice(0, 10)
 
@@ -91,6 +92,11 @@ export default function SeccionEncargadoPage() {
   const [registradosSesion, setRegistradosSesion] = useState([])
   const [temporalesSesion, setTemporalesSesion] = useState([])
   const [listaAbierta,     setListaAbierta]     = useState(true)
+  // Multi-furgoneta por día: lista puramente visual de las furgonetas que
+  // este encargado ya tocó hoy, con su avance de cupo — no afecta ninguna
+  // regla de negocio, el cierre real (por cupo o "Termina mi día") ya
+  // ocurre solo en el servidor.
+  const [misFurgonetas, setMisFurgonetas] = useState([])
   // Calendario propio de "Mis horas" — separado del buscador.
   const [fechaMisHoras, setFechaMisHoras] = useState(hoy)
   // Reemplaza al booleano selfRegistrado — ahora trae la jornada completa
@@ -152,6 +158,15 @@ export default function SeccionEncargadoPage() {
       .then((rows) => setTemporalesSesion(rows.map((r) => ({ nombre: r.nombre_completo }))))
       .catch(() => {})
   }, [tokenTurno])
+
+  // Multi-furgoneta: lista de furgonetas propias de hoy, para el panel
+  // visual. Se recarga al entrar y después de cada registro exitoso.
+  const cargarMisFurgonetas = useCallback(() => {
+    if (!tokenTurno) return
+    misFurgonetasHoy(tokenTurno).then(setMisFurgonetas).catch(() => {})
+  }, [tokenTurno])
+
+  useEffect(() => { cargarMisFurgonetas() }, [cargarMisFurgonetas])
 
   // Guard de acceso (tras declarar todos los hooks)
   if (!userId || rol !== 'encargado') {
@@ -216,6 +231,9 @@ export default function SeccionEncargadoPage() {
       }
       if (!esSelf) {
         setRegistradosSesion((prev) => [...prev, { id: empleadoId, fecha: fechaBuscador }])
+        // El registro puede haber llenado el cupo y cerrado la furgoneta
+        // sola — refresca el panel visual para reflejarlo.
+        cargarMisFurgonetas()
       }
       mostrarExito()
 
@@ -283,12 +301,31 @@ export default function SeccionEncargadoPage() {
           <p className="mt-1 text-xs text-gold">Encargado: {nombre}</p>
         </div>
 
-        {/* Aviso privacidad */}
-        <div className="p-3 bg-gray-50 rounded-xl">
-          <p className="text-xs text-center text-gray-400">
-            El salario acumulado no se muestra al encargado.
-          </p>
-        </div>
+        {/* ── Multi-furgoneta: botón para entrar a otra, arriba y visible.
+            Los chips de avance solo aparecen si hay más de una furgoneta
+            hoy (la actual siempre cuenta como 1). ── */}
+        {modo === 'idle' && !exito && (
+          <>
+            <Button
+              variant="outline"
+              icon={<Truck className="w-4 h-4" />}
+              onClick={() => navigate(Direccion.encargadoPin, { state: { telefono, nombre, empleadoId: userId } })}
+            >
+              Entrar a otra furgoneta
+            </Button>
+            {misFurgonetas.length > 1 && (
+              <div className="flex flex-wrap items-center gap-2 px-1">
+                {misFurgonetas.map((f) => (
+                  <span key={f.furgoneta_id}
+                    className={`text-[10px] font-semibold px-2 py-1 rounded-full ${f.cerrada ? 'bg-primary/10 text-primary' : 'bg-gold/10 text-gold'}`}>
+                    {f.apodo}: {f.cerrada ? 'Cerrada' : `${f.registrados_hoy}/${f.plazas_ocupadas ?? '—'}`}
+                  </span>
+                ))}
+              </div>
+            )}
+            <hr className="border-t border-gray-200" />
+          </>
+        )}
 
         {error && (
           <div className="p-3 border border-red-200 bg-red-50 rounded-xl">
@@ -310,47 +347,11 @@ export default function SeccionEncargadoPage() {
           </div>
         )}
 
-        {/* ── Búsqueda de jornada — calendario + buscador, plegable ──
-            Plegado por default para que la pantalla no abrume: el
-            encargado la abre solo cuando necesita buscar a alguien de su
-            equipo. Calendario propio (fechaBuscador), independiente del de
-            "Mis horas". */}
-        <Collapsible title="Búsqueda de jornada" color="green" defaultOpen={false}>
-          {/* Criterio 1: fecha de trabajo */}
-          <div className="flex items-center gap-3">
-            <CircleIcon icon={Calendar} size="md" />
-            <div className="flex-1">
-              <Input
-                label="Fecha de trabajo"
-                type="date"
-                max={hoy}
-                value={fechaBuscador}
-                onChange={(e) => { setFechaBuscador(e.target.value); setModo('idle'); setTrabajador(null) }}
-              />
-            </div>
-          </div>
-
-          {/* Criterio 2: buscador de empleado (mismo bloque, bajo la fecha) */}
-          {modo === 'idle' && !exito && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <div className="flex items-center gap-2 mb-2">
-                <Search className="w-3.5 h-3.5 text-gray-400" />
-                <p className="text-[10px] font-semibold text-gray-400 uppercase">
-                  Buscar empleado en esta fecha
-                </p>
-              </div>
-              <BuscadorEmpleado
-                empleados={empleados}
-                loading={cargando}
-                onSelect={handleSeleccionar}
-              />
-            </div>
-          )}
-        </Collapsible>
-
-        {/* ── Cambio 2.3 (Séptima llamada): panel desplegable con la lista de
-            personas ya registradas en la jornada activa. Crece dinámicamente
-            y evita duplicados u omisiones, sin datos económicos. ── */}
+        {/* ── Registrados — primero en la pantalla: es el estado principal
+            del día. Cambio 2.3 (Séptima llamada): panel desplegable con la
+            lista de personas ya registradas en la jornada activa. Crece
+            dinámicamente y evita duplicados u omisiones, sin datos
+            económicos. ── */}
         <Card>
           <button
             type="button"
@@ -370,6 +371,9 @@ export default function SeccionEncargadoPage() {
 
           {listaAbierta && (
             <div className="mt-3">
+              {fechaBuscador !== hoy && (
+                <p className="text-[10px] text-gold mb-2">Fecha: {fechaBuscador}</p>
+              )}
               {totalRegistrados === 0 ? (
                 <p className="text-gray-400 text-xs text-center py-3">
                   Aún no hay personas registradas en esta fecha.
@@ -410,11 +414,66 @@ export default function SeccionEncargadoPage() {
           )}
         </Card>
 
-        {/* ── IDLE: horas propias + temporal ── */}
+        {/* ── Búsqueda de jornada — calendario + buscador, plegable ──
+            Plegado por default para que la pantalla no abrume: el
+            encargado la abre solo cuando necesita buscar a alguien de su
+            equipo. Calendario propio (fechaBuscador), independiente del de
+            "Mis horas". */}
+        <Collapsible title="Búsqueda de jornada" color="green" defaultOpen={false}>
+          {/* Criterio 1: fecha de trabajo */}
+          <div className="flex items-center gap-3">
+            <CircleIcon icon={Calendar} size="md" />
+            <div className="flex-1">
+              <Input
+                label="Fecha de trabajo"
+                type="date"
+                max={hoy}
+                value={fechaBuscador}
+                onChange={(e) => { setFechaBuscador(e.target.value); setModo('idle'); setTrabajador(null) }}
+              />
+            </div>
+          </div>
+
+          {/* Criterio 2: buscador de empleado (mismo bloque, bajo la fecha) */}
+          {modo === 'idle' && !exito && (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <Search className="w-3.5 h-3.5 text-gray-400" />
+                <p className="text-[10px] font-semibold text-gray-400 uppercase">
+                  Buscar empleado en esta fecha
+                </p>
+              </div>
+              <BuscadorEmpleado
+                empleados={empleados}
+                loading={cargando}
+                onSelect={handleSeleccionar}
+              />
+            </div>
+          )}
+        </Collapsible>
+
+        {/* Aviso privacidad — informativo, sin acción, discreto */}
+        <div className="p-3 bg-gray-50 rounded-xl">
+          <p className="text-xs text-center text-gray-400">
+            El salario acumulado no se muestra al encargado.
+          </p>
+        </div>
+
+        {/* ── IDLE: temporal arriba, mis horas hasta abajo (es el cierre
+            del día completo, la acción más consecuente de la pantalla) ── */}
         {modo === 'idle' && !exito && (
           <>
-            <Card>
-              <SectionTitle color="gold">Mis horas</SectionTitle>
+            <Collapsible title="Agregar empleado temporal" color="green" defaultOpen={false}>
+              <Button
+                variant="primary"
+                icon={<UserPlus className="w-4 h-4" />}
+                onClick={() => { setError(null); setModo('temporal') }}
+              >
+                Agregar empleado temporal
+              </Button>
+            </Collapsible>
+
+            <Collapsible title="Mis horas" color="gold" defaultOpen={false}>
               <div className="flex items-center gap-3 mb-4">
                 <CircleIcon icon={UserCircle} size="md" />
                 <div>
@@ -457,6 +516,11 @@ export default function SeccionEncargadoPage() {
                         : estadoSelf === 'corregir' ? 'COMPLETAR MIS HORAS'
                         : 'VER MIS HORAS'}
                     </Button>
+                    {estadoSelf === 'crear' && fechaMisHoras === hoy && (
+                      <p className="mt-2 text-[10px] text-center text-gold">
+                        Esto termina tu día completo: cierra tu jornada y todas tus furgonetas abiertas de hoy, aunque no hayan llegado a su cupo.
+                      </p>
+                    )}
                     {estadoSelf === 'ver' && (
                       <p className="mt-2 text-[10px] text-center text-gray-400">
                         Tus horas de esta fecha ya fueron registradas.
@@ -465,17 +529,7 @@ export default function SeccionEncargadoPage() {
                   </>
                 )}
               </div>
-            </Card>
-
-            <Card>
-              <Button
-                variant="primary"
-                icon={<UserPlus className="w-4 h-4" />}
-                onClick={() => { setError(null); setModo('temporal') }}
-              >
-                Agregar temporal
-              </Button>
-            </Card>
+            </Collapsible>
           </>
         )}
 

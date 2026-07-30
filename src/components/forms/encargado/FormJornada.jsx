@@ -82,7 +82,7 @@ export default function FormJornada({
         <Button variant="outline" type="button" onClick={onCancel}>
           CANCELAR
         </Button>
-        <Button type="submit" variant="primary" disabled={guardando || !horas}>
+        <Button type="submit" variant="primary" disabled={guardando || (!horas && !destajo)}>
           {guardando ? 'GUARDANDO…' : submitLabel}
         </Button>
       </div>

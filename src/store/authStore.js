@@ -16,11 +16,12 @@ export const useAuthStore = create()(
       vehiculoActivoId: null,
       vehiculoActivoNombre: null,
       tokenTurno: null,
+      telefono: null,
 
       setAuth: (payload) => set(payload),
       clear: () => set({
         rol: null, userId: null, nombre: null, codigoCorto: null,
-        vehiculoActivoId: null, vehiculoActivoNombre: null, tokenTurno: null
+        vehiculoActivoId: null, vehiculoActivoNombre: null, tokenTurno: null, telefono: null
       })
     }),
     {
@@ -41,7 +42,8 @@ export const useAuthStore = create()(
         state.rol === 'encargado'
           ? {
               rol: null, userId: null, nombre: null, codigoCorto: null,
-              vehiculoActivoId: null, vehiculoActivoNombre: null, tokenTurno: null
+              vehiculoActivoId: null, vehiculoActivoNombre: null, tokenTurno: null,
+              telefono: null
             }
           : state
     }

@@ -53,7 +53,11 @@ export default function IngresarPinFurgonetaPage() {
         nombre:               r.empleado_nombre,
         vehiculoActivoId:     r.vehiculo_id,
         vehiculoActivoNombre: r.vehiculo_nombre,
-        tokenTurno:           r.token_turno
+        tokenTurno:           r.token_turno,
+        // Se guarda en memoria (excluido de localStorage, igual que el
+        // resto de la sesión de encargado) para poder entrar a otra
+        // furgoneta después sin volver a escribirlo.
+        telefono:             telefono
       })
       // Si el turno ya tenía plazas registradas (reingreso el mismo día),
       // no tiene caso volver a pedirlas — directo al panel.

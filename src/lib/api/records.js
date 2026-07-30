@@ -481,3 +481,18 @@ export async function buscarTemporalesFurgonetaDia(tokenTurno) {
   if (error) throw new Error(error.message)
   return data ?? []   // [{ id, nombre_completo, horas_trabajadas, destajo }]
 }
+
+/* ─── Multi-furgoneta por día ─────────────────────────────
+ * Un encargado puede operar varias furgonetas distintas el mismo día
+ * (nunca la misma dos veces). Cada furgoneta cierra sola al llegar a su
+ * cupo de plazas; "Termina mi día" (cerrarJornadaEncargado) cierra de un
+ * jalón las que sigan abiertas. Esta función es puramente informativa —
+ * no afecta ninguna regla de negocio.
+ */
+export async function misFurgonetasHoy(tokenTurno) {
+  const { data, error } = await supabase.rpc('mis_furgonetas_hoy', {
+    p_token_turno: tokenTurno,
+  })
+  if (error) throw new Error(error.message)
+  return data ?? []   // [{ furgoneta_id, apodo, plazas_ocupadas, registrados_hoy, cerrada }]
+}
