@@ -292,6 +292,7 @@ function ModalVehiculo({ open, onClose, onSaved }) {
   const [error, setError]   = useState(null)
   const [saving, setSaving] = useState(false)
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value })
+  const tarifaValida = parseFloat(form.tarifa_plaza) > 0
 
   const handleSave = async () => {
     setError(null); setSaving(true)
@@ -315,7 +316,11 @@ function ModalVehiculo({ open, onClose, onSaved }) {
         {error && <p className="text-danger text-xs">{error}</p>}
         <Input label="Nombre *" value={form.nombre} onChange={set('nombre')} />
         <Input label="Matrícula (opcional)" value={form.matricula} onChange={set('matricula')} />
-        <Input label="Tarifa por plaza (€) *" type="number" value={form.tarifa_plaza} onChange={set('tarifa_plaza')} />
+        <Input label="Tarifa por plaza (€) *" type="number" min="0.01" step="0.01"
+          value={form.tarifa_plaza} onChange={set('tarifa_plaza')} />
+        {form.tarifa_plaza !== '' && !tarifaValida && (
+          <p className="text-danger text-[10px] -mt-2">La tarifa por plaza debe ser mayor a 0.</p>
+        )}
         <div>
           <label className="label-base">Tipo de Pago *</label>
           <select value={form.tipo_pago} onChange={set('tipo_pago')} className="input-base">
@@ -325,7 +330,7 @@ function ModalVehiculo({ open, onClose, onSaved }) {
         </div>
         <Input label="PIN (4 díg, opcional — aleatorio si vacío)" value={form.pin_actual}
           onChange={set('pin_actual')} maxLength={4} />
-        <Button variant="primary" onClick={handleSave} disabled={saving || !form.nombre || !form.tarifa_plaza}>
+        <Button variant="primary" onClick={handleSave} disabled={saving || !form.nombre || !tarifaValida}>
           {saving ? 'GUARDANDO…' : 'GUARDAR'}
         </Button>
       </div>

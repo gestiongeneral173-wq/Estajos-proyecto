@@ -40,14 +40,37 @@ import { Direccion } from '../../utils/constants.js'
  * corregir_jornada_empleado/_encargado); con ambos campos llenos → solo
  * lectura. Completar un día PASADO ya cerrado nunca cierra la sesión — eso
  * sigue siendo exclusivo de cerrar_jornada_encargado con la fecha de HOY.
+ *
+ * Dos calendarios independientes (cambio posterior): el buscador de
+ * empleados y "Mis horas" antes compartían una sola fecha — cambiar de día
+ * para completar tu propio turno también recargaba (y podía confundir) el
+ * buscador del equipo, y viceversa. Ahora cada uno tiene su propia fecha,
+ * ambas con default en hoy.
  */
+
+/* ─── Sección plegable (mismo patrón que TrabajadorDetallePage/VehiculoDetallePage) ─── */
+function Collapsible({ title, color = 'green', children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <Card>
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between">
+        <SectionTitle color={color} className="mb-0">{title}</SectionTitle>
+        {open ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+      </button>
+      {open && <div className="mt-4">{children}</div>}
+    </Card>
+  )
+}
+
 export default function SeccionEncargadoPage() {
   const navigate = useNavigate()
   const { userId, nombre, vehiculoActivoId, vehiculoActivoNombre, rol, clear } = useAuthStore()
 
   const hoy = new Date().toISOString().slice(0, 10)
 
-  const [fecha,      setFecha]      = useState(hoy)
+  // Calendario del buscador de empleados (equipo del día) — independiente
+  // del de "Mis horas".
+  const [fechaBuscador, setFechaBuscador] = useState(hoy)
   const [empleados,  setEmpleados]  = useState([])
   const [cargando,   setCargando]   = useState(false)
   // 'idle' | 'form' | 'corregir' | 'ver' | 'self' | 'self-corregir' | 'self-ver' | 'temporal'
@@ -67,24 +90,36 @@ export default function SeccionEncargadoPage() {
   const [registradosSesion, setRegistradosSesion] = useState([])
   const [temporalesSesion, setTemporalesSesion] = useState([])
   const [listaAbierta,     setListaAbierta]     = useState(true)
+  // Calendario propio de "Mis horas" — separado del buscador.
+  const [fechaMisHoras, setFechaMisHoras] = useState(hoy)
   // Reemplaza al booleano selfRegistrado — ahora trae la jornada completa
   // (o vacía) para decidir entre crear / corregir / ver.
   const [estadoPropio, setEstadoPropio] = useState({
     registrado: false, completo: false, jornada_id: null, horas_trabajadas: null, pago_destajo: null,
   })
 
-  // Cargar empleados con flags de registro para la fecha elegida (#4, #5)
+  // Buscador de empleados — depende solo de fechaBuscador.
   const cargarEmpleados = useCallback(async (f) => {
     setCargando(true); setError(null)
     try {
       setEmpleados(await buscarEmpleadosEncargado(f))
-      setEstadoPropio(await estadoJornadaPropiaEncargado(userId, f))
     } catch (err) {
       setError(err.message)
     } finally { setCargando(false) }
+  }, [])
+
+  useEffect(() => { cargarEmpleados(fechaBuscador) }, [fechaBuscador, cargarEmpleados])
+
+  // "Mis horas" — depende solo de fechaMisHoras, sin recargar el buscador.
+  const cargarEstadoPropio = useCallback(async (f) => {
+    try {
+      setEstadoPropio(await estadoJornadaPropiaEncargado(userId, f))
+    } catch (err) {
+      setError(err.message)
+    }
   }, [userId])
 
-  useEffect(() => { cargarEmpleados(fecha) }, [fecha, cargarEmpleados])
+  useEffect(() => { cargarEstadoPropio(fechaMisHoras) }, [fechaMisHoras, cargarEstadoPropio])
 
   // Guard de acceso (tras declarar todos los hooks)
   if (!userId || rol !== 'encargado') {
@@ -95,10 +130,10 @@ export default function SeccionEncargadoPage() {
   // Cambio 2.3: lista de personas registradas por ESTA furgoneta en la
   // fecha activa (no todas las registradas por otros encargados).
   const idsRegistradosSesion = new Set(
-    registradosSesion.filter((r) => r.fecha === fecha).map((r) => r.id)
+    registradosSesion.filter((r) => r.fecha === fechaBuscador).map((r) => r.id)
   )
   const registradosFecha = empleados.filter((e) => e.registrado && idsRegistradosSesion.has(e.id))
-  const totalRegistrados = registradosFecha.length + (fecha === hoy ? temporalesSesion.length : 0)
+  const totalRegistrados = registradosFecha.length + (fechaBuscador === hoy ? temporalesSesion.length : 0)
 
   // Corrección retroactiva — estado de "Mis horas" para la fecha elegida:
   //  'crear'    → sin jornada hoy, turno abierto esperando el primer cierre
@@ -106,7 +141,7 @@ export default function SeccionEncargadoPage() {
   //  'corregir' → jornada cerrada con un campo todavía en 0
   //  'ver'      → jornada cerrada y completa, solo lectura
   const estadoSelf = !estadoPropio.registrado
-    ? (fecha === hoy ? 'crear' : 'na')
+    ? (fechaMisHoras === hoy ? 'crear' : 'na')
     : (estadoPropio.completo ? 'ver' : 'corregir')
 
   const mostrarExito = () => {
@@ -137,24 +172,33 @@ export default function SeccionEncargadoPage() {
         await cerrarJornadaEncargado({ encargadoId: userId, horas, destajo })
       } else if (modo === 'self-corregir') {
         // Corrección de un día PASADO ya cerrado — pura, no cierra sesión.
-        await corregirJornadaEncargado({ jornadaId: estadoPropio.jornada_id, horas, destajo })
+        await corregirJornadaEncargado({ jornadaId: estadoPropio.jornada_id, encargadoId: userId, horas, destajo })
       } else if (modo === 'corregir') {
         // Completa el campo en 0 de la jornada del empleado seleccionado.
-        await corregirJornadaEmpleado({ jornadaId: trabajador.jornada_id, horas, destajo })
+        await corregirJornadaEmpleado({ jornadaId: trabajador.jornada_id, encargadoId: userId, horas, destajo })
       } else {
         // v6.0: el empleado normal usa registrar_jornada_empleado con la
         // fecha elegida en el calendario (permite registrar un día pasado
         // con su fecha real, no la de hoy).
-        await registrarJornadaEmpleado({ empleadoId, encargadoId: userId, horas, destajo, fecha })
+        await registrarJornadaEmpleado({ empleadoId, encargadoId: userId, horas, destajo, fecha: fechaBuscador })
       }
-      setRegistradosSesion((prev) => [...prev, { id: empleadoId, fecha }])
+      if (!esSelf) {
+        setRegistradosSesion((prev) => [...prev, { id: empleadoId, fecha: fechaBuscador }])
+      }
       mostrarExito()
-      await cargarEmpleados(fecha)
+
+      // Cada calendario recarga solo su propia data — completar tu turno
+      // no debe refrescar (ni parpadear) el buscador del equipo, y viceversa.
+      if (esSelf) {
+        await cargarEstadoPropio(fechaMisHoras)
+      } else {
+        await cargarEmpleados(fechaBuscador)
+      }
 
       // #6: registrar las horas propias cierra la jornada SOLO si es el
       // primer cierre de HOY (modo 'self'). Completar un día pasado ya
       // cerrado (modo 'self-corregir') nunca cierra la sesión.
-      if (modo === 'self' && fecha === hoy) {
+      if (modo === 'self' && fechaMisHoras === hoy) {
         setTimeout(() => {
           clear()
           navigate(Direccion.login, { replace: true })
@@ -233,13 +277,12 @@ export default function SeccionEncargadoPage() {
           </div>
         )}
 
-        {/* ── Cambio 2.2 (Séptima llamada): calendario + buscador UNIFICADOS ──
-            Ambos elementos son criterios de búsqueda de la jornada, por lo
-            que viven en un solo bloque contenedor: primero la fecha, luego
-            el buscador de texto, separados por una línea divisoria suave. */}
-        <Card>
-          <SectionTitle color="green">Búsqueda de jornada</SectionTitle>
-
+        {/* ── Búsqueda de jornada — calendario + buscador, plegable ──
+            Plegado por default para que la pantalla no abrume: el
+            encargado la abre solo cuando necesita buscar a alguien de su
+            equipo. Calendario propio (fechaBuscador), independiente del de
+            "Mis horas". */}
+        <Collapsible title="Búsqueda de jornada" color="green" defaultOpen={false}>
           {/* Criterio 1: fecha de trabajo */}
           <div className="flex items-center gap-3">
             <CircleIcon icon={Calendar} size="md" />
@@ -248,16 +291,11 @@ export default function SeccionEncargadoPage() {
                 label="Fecha de trabajo"
                 type="date"
                 max={hoy}
-                value={fecha}
-                onChange={(e) => { setFecha(e.target.value); setModo('idle'); setTrabajador(null) }}
+                value={fechaBuscador}
+                onChange={(e) => { setFechaBuscador(e.target.value); setModo('idle'); setTrabajador(null) }}
               />
             </div>
           </div>
-          {fecha !== hoy && (
-            <p className="mt-2 text-[10px] text-center text-gold">
-              Registrando una fecha pasada — tu sesión no se cerrará al guardar tus horas.
-            </p>
-          )}
 
           {/* Criterio 2: buscador de empleado (mismo bloque, bajo la fecha) */}
           {modo === 'idle' && !exito && (
@@ -269,13 +307,13 @@ export default function SeccionEncargadoPage() {
                 </p>
               </div>
               <BuscadorEmpleado
-                empleados={empleados.filter((e) => e.id !== userId)}
+                empleados={empleados}
                 loading={cargando}
                 onSelect={handleSeleccionar}
               />
             </div>
           )}
-        </Card>
+        </Collapsible>
 
         {/* ── Cambio 2.3 (Séptima llamada): panel desplegable con la lista de
             personas ya registradas en la jornada activa. Crece dinámicamente
@@ -319,7 +357,7 @@ export default function SeccionEncargadoPage() {
                       <Check className="w-3.5 h-3.5 text-primary flex-shrink-0" />
                     </div>
                   ))}
-                  {fecha === hoy && temporalesSesion.map((t, i) => (
+                  {fechaBuscador === hoy && temporalesSesion.map((t, i) => (
                     <div key={`tmp-${i}`}
                       className="flex items-center justify-between px-3 py-2 bg-gold/5 rounded-lg">
                       <div className="flex items-center gap-2 min-w-0">
@@ -351,28 +389,49 @@ export default function SeccionEncargadoPage() {
                   <p className="text-gray-500 text-[10px]">Encargado</p>
                 </div>
               </div>
-              {estadoSelf === 'na' ? (
-                <p className="text-gray-400 text-xs text-center py-2">
-                  No hay turno registrado en esta fecha.
+
+              {/* Calendario propio de "Mis horas" — separado del buscador
+                  de empleados, no afecta ni se ve afectado por él. */}
+              <Input
+                label="Fecha de tu turno"
+                type="date"
+                max={hoy}
+                value={fechaMisHoras}
+                onChange={(e) => {
+                  setFechaMisHoras(e.target.value)
+                  if (modo === 'self' || modo === 'self-corregir' || modo === 'self-ver') setModo('idle')
+                }}
+              />
+              {fechaMisHoras !== hoy && (
+                <p className="mt-2 text-[10px] text-center text-gold">
+                  Viendo una fecha pasada — completar tus horas de ese día no cierra tu sesión.
                 </p>
-              ) : (
-                <>
-                  <Button
-                    variant="dark"
-                    icon={<Clock className="w-4 h-4" />}
-                    onClick={handleSeleccionarSelf}
-                  >
-                    {estadoSelf === 'crear' ? 'REGISTRAR MIS HORAS'
-                      : estadoSelf === 'corregir' ? 'COMPLETAR MIS HORAS'
-                      : 'VER MIS HORAS'}
-                  </Button>
-                  {estadoSelf === 'ver' && (
-                    <p className="mt-2 text-[10px] text-center text-gray-400">
-                      Tus horas de esta fecha ya fueron registradas.
-                    </p>
-                  )}
-                </>
               )}
+
+              <div className="mt-4">
+                {estadoSelf === 'na' ? (
+                  <p className="text-gray-400 text-xs text-center py-2">
+                    No hay turno registrado en esta fecha.
+                  </p>
+                ) : (
+                  <>
+                    <Button
+                      variant="dark"
+                      icon={<Clock className="w-4 h-4" />}
+                      onClick={handleSeleccionarSelf}
+                    >
+                      {estadoSelf === 'crear' ? 'REGISTRAR MIS HORAS'
+                        : estadoSelf === 'corregir' ? 'COMPLETAR MIS HORAS'
+                        : 'VER MIS HORAS'}
+                    </Button>
+                    {estadoSelf === 'ver' && (
+                      <p className="mt-2 text-[10px] text-center text-gray-400">
+                        Tus horas de esta fecha ya fueron registradas.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
             </Card>
 
             <Card>
@@ -397,6 +456,11 @@ export default function SeccionEncargadoPage() {
                 <p className="text-gray-500 text-[10px]">{trabajador.telefono}</p>
               </div>
             </div>
+            {fechaBuscador !== hoy && (
+              <p className="text-[10px] text-gold mb-3">
+                Esta jornada no tiene un campo registrado — completa solo lo que falta en esta fecha pasada.
+              </p>
+            )}
             <FormJornada
               guardando={guardando}
               hideFecha

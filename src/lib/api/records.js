@@ -310,24 +310,28 @@ export async function estadoJornadaPropiaEncargado(encargadoId, fecha) {
 
 // Corrección retroactiva: completa horas_trabajadas o pago_destajo de una
 // jornada ya registrada, SOLO si ese campo específico sigue en 0. Valida
-// fue_liquidado del lado del servidor.
-export async function corregirJornadaEmpleado({ jornadaId, horas, destajo }) {
+// fue_liquidado del lado del servidor, y que la jornada pertenezca al
+// encargado que llama (p_encargado_id) — nadie puede corregir el registro
+// de un empleado que no es suyo.
+export async function corregirJornadaEmpleado({ jornadaId, encargadoId, horas, destajo }) {
   const { error } = await supabase.rpc('corregir_jornada_empleado', {
-    p_jornada_id: jornadaId,
-    p_horas:      horas,
-    p_destajo:    destajo,
+    p_jornada_id:   jornadaId,
+    p_encargado_id: encargadoId,
+    p_horas:        horas,
+    p_destajo:      destajo,
   })
   if (error) throw new Error(error.message)
 }
 
 // Igual que corregirJornadaEmpleado, pero para la jornada propia del
 // encargado (jornada_encargado) ya cerrada — no dispara ningún cierre de
-// sesión, es una corrección pura.
-export async function corregirJornadaEncargado({ jornadaId, horas, destajo }) {
+// sesión, es una corrección pura. También exige que el turno sea suyo.
+export async function corregirJornadaEncargado({ jornadaId, encargadoId, horas, destajo }) {
   const { error } = await supabase.rpc('corregir_jornada_encargado', {
-    p_jornada_id: jornadaId,
-    p_horas:      horas,
-    p_destajo:    destajo,
+    p_jornada_id:   jornadaId,
+    p_encargado_id: encargadoId,
+    p_horas:        horas,
+    p_destajo:      destajo,
   })
   if (error) throw new Error(error.message)
 }

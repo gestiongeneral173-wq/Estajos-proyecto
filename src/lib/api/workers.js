@@ -141,41 +141,40 @@ export async function actualizarTrabajador(id, datos) {
   return conActivo(data)
 }
 
-export async function eliminarTrabajador(id) {
-  // v6.0: borrado FÍSICO (sin `activo`). El trigger de BD bloquea el delete
-  // si el empleado tiene una jornada de encargado activa en curso.
-  //
-  // Mitigación temporal (auditoría 2026-07-29): las FK hacia pago_empleado,
-  // adelanto_empleado, jornada_empleado y jornada_encargado son ON DELETE
-  // CASCADE, así que este delete borraría recibos y jornadas reales sin
-  // aviso. jornada_encargado cubre el turno propio de un empleado que es o
-  // fue encargado — vive en tabla aparte de jornada_empleado, así que hace
-  // falta chequearla por separado (corrección 2026-07-29 a la auditoría
-  // original, que omitió esta FK). Hasta que exista la liquidación forzada
-  // (RPC dedicada), se bloquea aquí si hay cualquier historial asociado.
-  const [pagos, adelantos, jornadas, jornadasEncargado] = await Promise.all([
-    supabase.from('pago_empleado').select('id', { count: 'exact', head: true }).eq('empleado_id', id),
-    supabase.from('adelanto_empleado').select('id', { count: 'exact', head: true }).eq('empleado_id', id),
-    supabase.from('jornada_empleado').select('id', { count: 'exact', head: true }).eq('empleado_id', id),
-    supabase.from('jornada_encargado').select('id', { count: 'exact', head: true }).eq('encargado_id', id),
-  ])
-  for (const r of [pagos, adelantos, jornadas, jornadasEncargado]) {
-    if (r.error) throw new Error(r.error.message)
-  }
-  const motivos = []
-  if (pagos.count > 0) motivos.push(`${pagos.count} pago(s)`)
-  if (adelantos.count > 0) motivos.push(`${adelantos.count} adelanto(s)`)
-  if (jornadas.count > 0) motivos.push(`${jornadas.count} jornada(s)`)
-  if (jornadasEncargado.count > 0) motivos.push(`${jornadasEncargado.count} jornada(s) de encargado`)
-  if (motivos.length > 0) {
-    throw new Error(
-      `No se puede dar de baja: este trabajador tiene ${motivos.join(', ')} registrados. ` +
-      `La baja está deshabilitada mientras no exista un flujo de liquidación forzada — contacta a soporte.`
-    )
-  }
-
-  const { error } = await supabase.from('empleados').delete().eq('id', id)
+// Baja con liquidación forzada — Fase A (solo lectura, se puede repetir).
+// Calcula, sin escribir nada, cuánto se le debe al trabajador barriendo
+// jornada_empleado + jornada_encargado (sin importar su rol actual) menos
+// adelanto_empleado, todo con fue_liquidado = false y sin filtro de fecha.
+export async function calcularBajaTrabajador(id) {
+  const { data, error } = await supabase.rpc('calcular_baja_empleado', { p_empleado_id: id })
   if (error) throw new Error(error.message)
+  const r = Array.isArray(data) ? data[0] : data
+  return {
+    total_devengado: Number(r?.total_devengado ?? 0),
+    total_adelantos: Number(r?.total_adelantos ?? 0),
+    monto_neto: Number(r?.monto_neto ?? 0),
+  }
+}
+
+// Baja con liquidación forzada — Fase B (transaccional). Recalcula el mismo
+// monto en el servidor y lo compara contra `montoEsperado` (el que vio el
+// admin en el modal); si difiere, aborta con la cifra nueva. Si coincide,
+// genera el recibo, marca todo como liquidado y borra al trabajador — las
+// tres cosas en la misma transacción de la RPC.
+export async function darDeBajaTrabajador({ id, montoEsperado, periodoInicio, periodoFin }) {
+  const { data, error } = await supabase.rpc('dar_de_baja_empleado', {
+    p_empleado_id: id,
+    p_monto_esperado: montoEsperado,
+    p_fecha_inicio_ciclo: periodoInicio,
+    p_fecha_cierre_ciclo: periodoFin,
+  })
+  if (error) throw new Error(error.message)
+  const r = Array.isArray(data) ? data[0] : data
+  return {
+    total_devengado: Number(r?.total_devengado ?? 0),
+    total_adelantos: Number(r?.total_adelantos ?? 0),
+    total_pagado: Number(r?.total_pagado ?? 0),
+  }
 }
 
 /**

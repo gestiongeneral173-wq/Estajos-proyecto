@@ -16,7 +16,9 @@ export default function FormVehiculo({
   saving,
   error,
 }) {
-  const canSubmit = values.nombre?.trim() && values.matricula?.trim()
+  const tarifaValida = parseFloat(values.tarifa_plaza) > 0
+  const plazasValidas = values.plazas_totales !== '' && parseInt(values.plazas_totales, 10) >= 0
+  const canSubmit = values.nombre?.trim() && values.matricula?.trim() && tarifaValida && plazasValidas
 
   return (
     <div className="space-y-4">
@@ -35,15 +37,25 @@ export default function FormVehiculo({
       <Input
         label="Plazas totales"
         type="number"
+        min="0"
+        step="1"
         value={values.plazas_totales}
         onChange={onChange('plazas_totales')}
       />
+      {values.plazas_totales !== '' && !plazasValidas && (
+        <p className="text-danger text-[10px] -mt-2">Las plazas totales no pueden ser negativas.</p>
+      )}
       <Input
-        label="Tarifa por plaza (€)"
+        label="Tarifa por plaza (€) *"
         type="number"
+        min="0.01"
+        step="0.01"
         value={values.tarifa_plaza}
         onChange={onChange('tarifa_plaza')}
       />
+      {values.tarifa_plaza !== '' && !tarifaValida && (
+        <p className="text-danger text-[10px] -mt-2">La tarifa por plaza debe ser mayor a 0.</p>
+      )}
       <div>
         <label className="label-base">Tipo de Pago</label>
         <select

@@ -20,7 +20,8 @@ import { logout }               from '../../lib/api/auth.js'
 import {
   getTrabajadorPorId,
   actualizarTrabajador,
-  eliminarTrabajador,
+  calcularBajaTrabajador,
+  darDeBajaTrabajador,
   getBalanceTrabajador
 } from '../../lib/api/workers.js'
 import {
@@ -33,6 +34,7 @@ import {
   eliminarAdelantoEmpleado,
 } from '../../lib/api/records.js'
 import { useRealtime } from '../../hooks/useRealtime.js'
+import { calcularPeriodoCiclo } from '../../lib/api/paymentLists.js'
 
 //Importamos Direccion de constants.js  : Para el uso de direcciones
 import { Direccion } from '../../utils/constants.js'
@@ -108,10 +110,13 @@ export default function TrabajadorDetallePage() {
   const [savingJornada, setSavingJornada]         = useState(false)
   const [jornadaError, setJornadaError]           = useState(null)
 
-  // Cambio 1.3.9 (Octava llamada): dar de baja con confirmación en modal
-  const [bajaModalOpen, setBajaModalOpen] = useState(false)
-  const [savingBaja, setSavingBaja]       = useState(false)
-  const [bajaError, setBajaError]         = useState(null)
+  // Baja con liquidación forzada (C.5): Fase A calcula lo que se le debe,
+  // Fase B liquida y borra tras confirmación explícita del monto real.
+  const [bajaModalOpen, setBajaModalOpen]         = useState(false)
+  const [bajaCalculo, setBajaCalculo]             = useState(null)
+  const [calculandoBaja, setCalculandoBaja]       = useState(false)
+  const [savingBaja, setSavingBaja]               = useState(false)
+  const [bajaError, setBajaError]                 = useState(null)
 
   // Cambio "Opciones de Editar o Eliminar Adelantos" (octava.3): editar
   // (solo monto, fecha fija) o eliminar (borrado permanente) un adelanto
@@ -254,14 +259,41 @@ export default function TrabajadorDetallePage() {
     }
   }
 
-  /* ── Cambio 1.3.9: dar de baja (soft delete) tras confirmación ── */
-  const handleDarDeBaja = async () => {
+  /* ── Baja con liquidación forzada — Fase A: calcular y abrir el modal ── */
+  const handleAbrirBaja = async () => {
+    setBajaError(null); setCalculandoBaja(true)
+    try {
+      const calculo = await calcularBajaTrabajador(id)
+      setBajaCalculo(calculo)
+      setBajaModalOpen(true)
+    } catch (err) {
+      setBajaError(err.message)
+    } finally {
+      setCalculandoBaja(false)
+    }
+  }
+
+  /* ── Baja con liquidación forzada — Fase B: confirmar y ejecutar ──
+     Si el monto cambió desde el cálculo (otra jornada entró en el ínterin),
+     la RPC aborta con la cifra nueva — se refresca el cálculo para que el
+     próximo intento compare contra el monto real, no contra el viejo. */
+  const handleConfirmarBaja = async () => {
+    if (!bajaCalculo) return
     setSavingBaja(true); setBajaError(null)
     try {
-      await eliminarTrabajador(id)
+      const periodo = calcularPeriodoCiclo(trabajador.payment_period)
+      await darDeBajaTrabajador({
+        id,
+        montoEsperado: bajaCalculo.monto_neto,
+        periodoInicio: periodo.inicio,
+        periodoFin: new Date().toISOString().slice(0, 10),
+      })
       navigate(Direccion.CentralTrabajadores)
     } catch (err) {
       setBajaError(err.message)
+      try {
+        setBajaCalculo(await calcularBajaTrabajador(id))
+      } catch { /* deja visible el error original si el recálculo también falla */ }
       setSavingBaja(false)
     }
   }
@@ -613,24 +645,25 @@ export default function TrabajadorDetallePage() {
           )}
         </Collapsible>
 
-        {/* ── Dar de baja — Cambio 1.3.9 (Octava llamada) ──
-            Borrado FÍSICO (eliminarTrabajador), con confirmación obligatoria
-            en modal. Aviso 2026-07-29: la FK hacia jornadas/adelantos/pagos
-            es CASCADE, así que eliminarTrabajador ahora bloquea la baja si
-            el trabajador tiene cualquier historial financiero, en vez de
-            borrarlo. Ver mitigación en workers.js:eliminarTrabajador. */}
+        {/* ── Dar de baja — liquidación forzada (C.5) ──
+            Ya no es un DELETE directo: calcular_baja_empleado calcula lo
+            que se le debe (jornadas + turnos de encargado − adelantos, sin
+            filtro de fecha) y lo muestra antes de confirmar; solo entonces
+            dar_de_baja_empleado liquida y borra, en una sola transacción. */}
         <Card>
           <SectionTitle color="gold">Dar de baja</SectionTitle>
           <p className="text-gray-400 text-[10px] mb-3">
-            Esta acción retira al trabajador del listado activo. 
+            Calcula lo que se le debe, liquida ese monto y retira al trabajador de forma permanente.
           </p>
+          {bajaError && !bajaModalOpen && <p className="text-danger text-xs mb-2">{bajaError}</p>}
           <Button
             variant="outline"
             icon={<UserX className="w-4 h-4" />}
             className="!border-danger !text-danger hover:!bg-danger hover:!text-white"
-            onClick={() => { setBajaError(null); setBajaModalOpen(true) }}
+            onClick={handleAbrirBaja}
+            disabled={calculandoBaja}
           >
-            DAR DE BAJA
+            {calculandoBaja ? 'CALCULANDO…' : 'DAR DE BAJA'}
           </Button>
         </Card>
 
@@ -659,7 +692,7 @@ export default function TrabajadorDetallePage() {
         </div>
       </Modal>
 
-      {/* ── Modal de confirmación — Cambio 1.3.9 ── */}
+      {/* ── Modal de confirmación — baja con liquidación forzada ── */}
       <Modal
         open={bajaModalOpen}
         title="Confirmar baja"
@@ -667,11 +700,27 @@ export default function TrabajadorDetallePage() {
       >
         <div className="space-y-4">
           {bajaError && <p className="text-danger text-xs">{bajaError}</p>}
+          {bajaCalculo && (
+            <div className="bg-gray-50 rounded-xl p-3 space-y-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Devengado</span>
+                <span className="font-semibold text-navy-dark">{fmtEur(bajaCalculo.total_devengado)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Adelantos</span>
+                <span className="font-semibold text-danger">−{fmtEur(bajaCalculo.total_adelantos)}</span>
+              </div>
+              <div className="flex justify-between pt-1 border-t border-gray-200">
+                <span className="text-gray-700 font-semibold">Neto a liquidar</span>
+                <span className={`font-bold ${bajaCalculo.monto_neto < 0 ? 'text-danger' : 'text-primary'}`}>
+                  {fmtEur(bajaCalculo.monto_neto)}
+                </span>
+              </div>
+            </div>
+          )}
           <p className="text-gray-600 text-sm">
-            ¿Seguro que deseas dar de baja a <strong>{trabajador.nombre}</strong>?
-            Esta acción lo borra de forma <strong>permanente</strong>. Si tiene
-            jornadas, adelantos o pagos registrados, la baja se bloqueará
-            automáticamente hasta que exista un flujo de liquidación forzada.
+            ¿Seguro que deseas dar de baja a <strong>{trabajador.nombre}</strong>? Se liquidará el
+            monto de arriba (jornadas y adelantos pendientes) y luego se borrará de forma <strong>permanente</strong>.
           </p>
           <div className="grid grid-cols-2 gap-3">
             <Button variant="outline" onClick={() => setBajaModalOpen(false)} disabled={savingBaja}>
@@ -680,7 +729,7 @@ export default function TrabajadorDetallePage() {
             <Button
               variant="outline"
               className="!border-danger !text-danger hover:!bg-danger hover:!text-white"
-              onClick={handleDarDeBaja}
+              onClick={handleConfirmarBaja}
               disabled={savingBaja}
             >
               {savingBaja ? 'PROCESANDO…' : 'SÍ, DAR DE BAJA'}

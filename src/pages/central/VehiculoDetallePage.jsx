@@ -14,7 +14,7 @@ import FormVehiculo  from '../../components/forms/central/FormVehiculo.jsx'
 import { useAuthStore } from '../../store/authStore.js'
 import { logout } from '../../lib/api/auth.js'
 import {
-  getVehiculoPorId, actualizarVehiculo, eliminarVehiculo,
+  getVehiculoPorId, actualizarVehiculo, calcularBajaVehiculo, darDeBajaVehiculo,
   actualizarPlazasVehiculoDia, listarPlazasVehiculoPendientes,
   listarAdelantosVehiculoPendientes, registrarAdelantoVehiculo,
   actualizarMontoAdelantoVehiculo, eliminarAdelantoVehiculo,
@@ -87,11 +87,13 @@ export default function VehiculoDetallePage() {
   const [confirmAccion, setConfirmAccion] = useState(null) // { tipo: 'editar'|'eliminar', adelantoId, monto? }
   const [savingConfirmAccion, setSavingConfirmAccion] = useState(false)
 
-  // Cambio 1.5.5 (Octava llamada): dar de baja al vehículo, con modal de
-  // confirmación obligatorio — mismo patrón que "Dar de baja" de empleado.
-  const [bajaModalOpen, setBajaModalOpen] = useState(false)
-  const [savingBaja, setSavingBaja]       = useState(false)
-  const [bajaError, setBajaError]         = useState(null)
+  // Baja con liquidación forzada (C.5): Fase A calcula lo que se le debe a
+  // la furgoneta, Fase B liquida y borra tras confirmar el monto real.
+  const [bajaModalOpen, setBajaModalOpen]   = useState(false)
+  const [bajaCalculo, setBajaCalculo]       = useState(null)
+  const [calculandoBaja, setCalculandoBaja] = useState(false)
+  const [savingBaja, setSavingBaja]         = useState(false)
+  const [bajaError, setBajaError]           = useState(null)
 
   // Pendiente #4: liquidar el ciclo activo del vehículo (RPC
   // ejecutar_pago_vehiculo, migración 008), con modal de confirmación
@@ -242,14 +244,40 @@ export default function VehiculoDetallePage() {
     }
   }
 
-  /* ── Cambio 1.5.5 (Octava llamada): dar de baja al vehículo ── */
-  const handleDarDeBaja = async () => {
+  /* ── Baja con liquidación forzada — Fase A: calcular y abrir el modal ── */
+  const handleAbrirBaja = async () => {
+    setBajaError(null); setCalculandoBaja(true)
+    try {
+      const calculo = await calcularBajaVehiculo(id)
+      setBajaCalculo(calculo)
+      setBajaModalOpen(true)
+    } catch (err) {
+      setBajaError(err.message)
+    } finally {
+      setCalculandoBaja(false)
+    }
+  }
+
+  /* ── Baja con liquidación forzada — Fase B: confirmar y ejecutar ──
+     Si el monto cambió desde el cálculo, la RPC aborta con la cifra nueva —
+     se refresca el cálculo para que el próximo intento compare correcto. */
+  const handleConfirmarBaja = async () => {
+    if (!bajaCalculo) return
     setSavingBaja(true); setBajaError(null)
     try {
-      await eliminarVehiculo(id)
+      const periodo = calcularPeriodoCiclo(vehiculo.tipo_pago)
+      await darDeBajaVehiculo({
+        id,
+        montoEsperado: bajaCalculo.monto_neto,
+        periodoInicio: periodo.inicio,
+        periodoFin: new Date().toISOString().slice(0, 10),
+      })
       navigate(Direccion.CentralVehiculos)
     } catch (err) {
       setBajaError(err.message)
+      try {
+        setBajaCalculo(await calcularBajaVehiculo(id))
+      } catch { /* deja visible el error original si el recálculo también falla */ }
       setSavingBaja(false)
     }
   }
@@ -547,24 +575,25 @@ export default function VehiculoDetallePage() {
           </p>
         </Collapsible>
 
-        {/* ── Cambio 1.5.5 (Octava llamada): Dar de baja a un vehículo ──
-            Borrado FÍSICO (eliminarVehiculo), con confirmación obligatoria
-            en modal. Aviso 2026-07-29: la FK hacia jornadas/adelantos/pagos
-            es CASCADE, así que eliminarVehiculo ahora bloquea la baja si la
-            furgoneta tiene cualquier historial financiero, en vez de
-            borrarla. Ver mitigación en vehicles.js:eliminarVehiculo. */}
+        {/* ── Dar de baja — liquidación forzada (C.5) ──
+            Ya no es un DELETE directo: calcular_baja_furgoneta calcula lo
+            que se le debe (tarifa_aplicada × plazas_ocupadas − adelantos,
+            sin filtro de fecha) y lo muestra antes de confirmar; solo
+            entonces dar_de_baja_furgoneta liquida y borra, en una transacción. */}
         <Card>
           <SectionTitle color="gold">Dar de baja</SectionTitle>
           <p className="text-gray-400 text-[10px] mb-3">
-            Esta acción retira la furgoneta del listado activo. 
+            Calcula lo que se le debe, liquida ese monto y retira la furgoneta de forma permanente.
           </p>
+          {bajaError && !bajaModalOpen && <p className="text-danger text-xs mb-2">{bajaError}</p>}
           <Button
             variant="outline"
             icon={<UserX className="w-4 h-4" />}
             className="!border-danger !text-danger hover:!bg-danger hover:!text-white"
-            onClick={() => { setBajaError(null); setBajaModalOpen(true) }}
+            onClick={handleAbrirBaja}
+            disabled={calculandoBaja}
           >
-            DAR DE BAJA
+            {calculandoBaja ? 'CALCULANDO…' : 'DAR DE BAJA'}
           </Button>
         </Card>
 
@@ -603,7 +632,7 @@ export default function VehiculoDetallePage() {
         </div>
       </Modal>
 
-      {/* ── Modal de confirmación — dar de baja al vehículo (Cambio 1.5.5) ── */}
+      {/* ── Modal de confirmación — baja con liquidación forzada ── */}
       <Modal
         open={bajaModalOpen}
         title="Confirmar baja"
@@ -611,11 +640,27 @@ export default function VehiculoDetallePage() {
       >
         <div className="space-y-4">
           {bajaError && <p className="text-danger text-xs">{bajaError}</p>}
+          {bajaCalculo && (
+            <div className="bg-gray-50 rounded-xl p-3 space-y-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Generado</span>
+                <span className="font-semibold text-navy-dark">€{bajaCalculo.total_devengado.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Adelantos</span>
+                <span className="font-semibold text-danger">−€{bajaCalculo.total_adelantos.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between pt-1 border-t border-gray-200">
+                <span className="text-gray-700 font-semibold">Neto a liquidar</span>
+                <span className={`font-bold ${bajaCalculo.monto_neto < 0 ? 'text-danger' : 'text-primary'}`}>
+                  €{bajaCalculo.monto_neto.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
           <p className="text-gray-600 text-sm">
-            ¿Seguro que deseas dar de baja a <strong>{vehiculo.nombre}</strong>?
-            Esta acción la borra de forma <strong>permanente</strong>. Si tiene
-            jornadas, adelantos o pagos registrados, la baja se bloqueará
-            automáticamente hasta que exista un flujo de liquidación forzada.
+            ¿Seguro que deseas dar de baja a <strong>{vehiculo.nombre}</strong>? Se liquidará el
+            monto de arriba (jornadas y adelantos pendientes) y luego se borrará de forma <strong>permanente</strong>.
           </p>
           <div className="grid grid-cols-2 gap-3">
             <Button variant="outline" onClick={() => setBajaModalOpen(false)} disabled={savingBaja}>
@@ -624,7 +669,7 @@ export default function VehiculoDetallePage() {
             <Button
               variant="outline"
               className="!border-danger !text-danger hover:!bg-danger hover:!text-white"
-              onClick={handleDarDeBaja}
+              onClick={handleConfirmarBaja}
               disabled={savingBaja}
             >
               {savingBaja ? 'PROCESANDO…' : 'SÍ, DAR DE BAJA'}
