@@ -104,9 +104,10 @@ export default function TrabajadorDetallePage() {
   const [savingRol, setSavingRol] = useState(false)
   const [rolError, setRolError]   = useState(null)
 
-  // Cambio 1.3.7 (Octava llamada): edición de horas/destajo/fecha de una jornada
+  // Cambio 1.3.7 (Octava llamada): edición de horas/destajo de una jornada
+  // (la fecha no es editable — nunca debe poder alterarse desde nómina actual)
   const [editandoJornadaId, setEditandoJornadaId] = useState(null)
-  const [jornadaEdit, setJornadaEdit]             = useState({ horas: '', destajo: '', fecha: '' })
+  const [jornadaEdit, setJornadaEdit]             = useState({ horas: '', destajo: '' })
   const [savingJornada, setSavingJornada]         = useState(false)
   const [jornadaError, setJornadaError]           = useState(null)
 
@@ -210,11 +211,11 @@ export default function TrabajadorDetallePage() {
     finally { setSavingRol(false) }
   }
 
-  /* ── Cambio 1.3.7: guardar horas/destajo/fecha editados de una jornada ──
+  /* ── Cambio 1.3.7: guardar horas/destajo editados de una jornada ──
      Al guardar se recarga todo (jornadas + balance) para reflejar de
      inmediato el recálculo en cascada del subtotal del día y el saldo neto.
      La tarifa_aplicada (histórica) nunca se toca — solo corrige valores mal
-     capturados, no reprecia el trabajo ya hecho. */
+     capturados, no reprecia el trabajo ya hecho. La fecha nunca se toca. */
   const handleGuardarJornada = async (jornadaId, tabla) => {
     const horas   = parseFloat(jornadaEdit.horas)
     const destajo = parseFloat(jornadaEdit.destajo)
@@ -222,13 +223,9 @@ export default function TrabajadorDetallePage() {
       setJornadaError('Horas y destajo deben ser números válidos (≥ 0).')
       return
     }
-    if (!jornadaEdit.fecha) {
-      setJornadaError('La fecha no puede quedar vacía.')
-      return
-    }
     setSavingJornada(true); setJornadaError(null)
     try {
-      await actualizarJornadaTrabajador(jornadaId, { horas, destajo, fecha: jornadaEdit.fecha, tabla })
+      await actualizarJornadaTrabajador(jornadaId, { horas, destajo, tabla })
       setEditandoJornadaId(null)
       await cargar()
     } catch (err) { setJornadaError(err.message) }
@@ -549,15 +546,7 @@ export default function TrabajadorDetallePage() {
                 const subtotal = Number(j.horas) * tarifa + Number(j.destajo || 0)
                 return (
                   <div key={j.id} className="grid grid-cols-6 gap-1 py-1.5 border-b border-gray-50 last:border-0 items-center">
-                    {editing ? (
-                      <input
-                        type="date" value={jornadaEdit.fecha}
-                        onChange={(e) => setJornadaEdit({ ...jornadaEdit, fecha: e.target.value })}
-                        className="w-full px-1 py-0.5 bg-gray-50 border border-gray-200 rounded text-[9px]"
-                      />
-                    ) : (
-                      <p className="text-[10px] text-navy-dark">{fmtDate(j.fecha ?? j.created_at)}</p>
-                    )}
+                    <p className="text-[10px] text-navy-dark">{fmtDate(j.fecha ?? j.created_at)}</p>
 
                     {editing ? (
                       <input
@@ -596,7 +585,7 @@ export default function TrabajadorDetallePage() {
                       <button
                         onClick={() => {
                           setEditandoJornadaId(j.id)
-                          setJornadaEdit({ horas: String(j.horas), destajo: String(j.destajo), fecha: j.fecha ?? '' })
+                          setJornadaEdit({ horas: String(j.horas), destajo: String(j.destajo) })
                           setJornadaError(null)
                         }}
                         className="flex justify-end text-gray-400 hover:text-navy-dark"

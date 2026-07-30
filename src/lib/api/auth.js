@@ -94,7 +94,12 @@ export async function generarPinRegistro(maximoUso) {
  * Login de Encargado. El "encargado" es cualquier empleado que conoce
  * el PIN de un vehículo. Devuelve sus datos + el vehículo asociado.
  *
- * @returns {Promise<{empleado_id, empleado_nombre, vehiculo_id, vehiculo_nombre}>}
+ * A2 (2026-07-30): la RPC ahora también emite un token de turno
+ * (`turno_token`) — la prueba de que este login sí ocurrió, que las RPC
+ * de campo van a exigir de aquí en adelante. Vive solo en memoria
+ * (authStore), nunca en localStorage.
+ *
+ * @returns {Promise<{empleado_id, empleado_nombre, vehiculo_id, vehiculo_nombre, token_turno}>}
  */
 export async function loginEncargado(telefono, pinVehiculo) {
   const { data, error } = await supabase
@@ -112,6 +117,7 @@ export async function loginEncargado(telefono, pinVehiculo) {
     empleado_nombre: r.empleado_nombre,
     vehiculo_id:     r.furgoneta_id,
     vehiculo_nombre: r.furgoneta_apodo,
+    token_turno:     r.token_turno,
   }
 }
 

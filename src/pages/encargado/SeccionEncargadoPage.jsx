@@ -17,6 +17,7 @@ import {
   registrarJornadaEmpleado, cerrarJornadaEncargado, registrarTemporal,
   buscarEmpleadosEncargado, estadoJornadaPropiaEncargado,
   corregirJornadaEmpleado, corregirJornadaEncargado,
+  buscarJornadasFurgonetaDia, buscarTemporalesFurgonetaDia,
 } from '../../lib/api/records.js'
 
 import { Direccion } from '../../utils/constants.js'
@@ -64,7 +65,7 @@ function Collapsible({ title, color = 'green', children, defaultOpen = false }) 
 
 export default function SeccionEncargadoPage() {
   const navigate = useNavigate()
-  const { userId, nombre, vehiculoActivoId, vehiculoActivoNombre, rol, clear } = useAuthStore()
+  const { userId, nombre, vehiculoActivoId, vehiculoActivoNombre, rol, clear, tokenTurno } = useAuthStore()
 
   const hoy = new Date().toISOString().slice(0, 10)
 
@@ -102,24 +103,55 @@ export default function SeccionEncargadoPage() {
   const cargarEmpleados = useCallback(async (f) => {
     setCargando(true); setError(null)
     try {
-      setEmpleados(await buscarEmpleadosEncargado(f))
+      setEmpleados(await buscarEmpleadosEncargado(tokenTurno, f))
     } catch (err) {
       setError(err.message)
     } finally { setCargando(false) }
-  }, [])
+  }, [tokenTurno])
 
   useEffect(() => { cargarEmpleados(fechaBuscador) }, [fechaBuscador, cargarEmpleados])
 
   // "Mis horas" — depende solo de fechaMisHoras, sin recargar el buscador.
   const cargarEstadoPropio = useCallback(async (f) => {
     try {
-      setEstadoPropio(await estadoJornadaPropiaEncargado(userId, f))
+      setEstadoPropio(await estadoJornadaPropiaEncargado(tokenTurno, userId, f))
     } catch (err) {
       setError(err.message)
     }
-  }, [userId])
+  }, [tokenTurno, userId])
 
   useEffect(() => { cargarEstadoPropio(fechaMisHoras) }, [fechaMisHoras, cargarEstadoPropio])
+
+  // Repuebla "Registrados" (empleados normales) desde el servidor al entrar
+  // o al cambiar de fecha en el buscador — antes vivía solo en memoria y se
+  // perdía al salir y volver a entrar (la sesión del encargado nunca
+  // persiste entre recargas, por diseño de authStore). Se fusiona con lo
+  // que ya haya en memoria en vez de reemplazarlo, para no perder un alta
+  // recién hecha en esta misma sesión mientras la respuesta va y viene.
+  useEffect(() => {
+    if (!tokenTurno) return
+    buscarJornadasFurgonetaDia(tokenTurno, fechaBuscador)
+      .then((rows) => {
+        setRegistradosSesion((prev) => {
+          const yaTiene = new Set(prev.filter((r) => r.fecha === fechaBuscador).map((r) => r.id))
+          const nuevos = rows
+            .filter((r) => !yaTiene.has(r.empleado_id))
+            .map((r) => ({ id: r.empleado_id, fecha: fechaBuscador }))
+          return nuevos.length ? [...prev, ...nuevos] : prev
+        })
+      })
+      .catch(() => { /* no bloquear la pantalla si falla; el panel solo no se repuebla */ })
+  }, [tokenTurno, fechaBuscador])
+
+  // Repuebla los temporales de HOY registrados por esta furgoneta. Solo
+  // depende de tokenTurno (una vez por sesión) — temporalesSesion nunca
+  // dependió de fechaBuscador, solo se muestra cuando fechaBuscador === hoy.
+  useEffect(() => {
+    if (!tokenTurno) return
+    buscarTemporalesFurgonetaDia(tokenTurno)
+      .then((rows) => setTemporalesSesion(rows.map((r) => ({ nombre: r.nombre_completo }))))
+      .catch(() => {})
+  }, [tokenTurno])
 
   // Guard de acceso (tras declarar todos los hooks)
   if (!userId || rol !== 'encargado') {
@@ -169,18 +201,18 @@ export default function SeccionEncargadoPage() {
     try {
       if (modo === 'self') {
         // Primer cierre del turno de HOY — sin cambios, siempre "ahora".
-        await cerrarJornadaEncargado({ encargadoId: userId, horas, destajo })
+        await cerrarJornadaEncargado({ tokenTurno, encargadoId: userId, horas, destajo })
       } else if (modo === 'self-corregir') {
         // Corrección de un día PASADO ya cerrado — pura, no cierra sesión.
-        await corregirJornadaEncargado({ jornadaId: estadoPropio.jornada_id, encargadoId: userId, horas, destajo })
+        await corregirJornadaEncargado({ tokenTurno, jornadaId: estadoPropio.jornada_id, encargadoId: userId, horas, destajo })
       } else if (modo === 'corregir') {
         // Completa el campo en 0 de la jornada del empleado seleccionado.
-        await corregirJornadaEmpleado({ jornadaId: trabajador.jornada_id, encargadoId: userId, horas, destajo })
+        await corregirJornadaEmpleado({ tokenTurno, jornadaId: trabajador.jornada_id, encargadoId: userId, horas, destajo })
       } else {
         // v6.0: el empleado normal usa registrar_jornada_empleado con la
         // fecha elegida en el calendario (permite registrar un día pasado
         // con su fecha real, no la de hoy).
-        await registrarJornadaEmpleado({ empleadoId, encargadoId: userId, horas, destajo, fecha: fechaBuscador })
+        await registrarJornadaEmpleado({ tokenTurno, empleadoId, encargadoId: userId, horas, destajo, fecha: fechaBuscador })
       }
       if (!esSelf) {
         setRegistradosSesion((prev) => [...prev, { id: empleadoId, fecha: fechaBuscador }])
@@ -216,6 +248,7 @@ export default function SeccionEncargadoPage() {
     try {
       // v6.0: el temporal solo se registra (se paga en efectivo aparte).
       await registrarTemporal({
+        tokenTurno,
         nombre:  formData.nombre,
         horas:   formData.horas,
         destajo: formData.destajo,

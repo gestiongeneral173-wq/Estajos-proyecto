@@ -15,11 +15,12 @@ export const useAuthStore = create()(
       codigoCorto: null,
       vehiculoActivoId: null,
       vehiculoActivoNombre: null,
+      tokenTurno: null,
 
       setAuth: (payload) => set(payload),
       clear: () => set({
         rol: null, userId: null, nombre: null, codigoCorto: null,
-        vehiculoActivoId: null, vehiculoActivoNombre: null
+        vehiculoActivoId: null, vehiculoActivoNombre: null, tokenTurno: null
       })
     }),
     {
@@ -33,11 +34,14 @@ export const useAuthStore = create()(
       // a abrirla la sesión aparece vacía y debe iniciar sesión de nuevo
       // introduciendo el PIN del vehículo. Trabajador y admin sí mantienen
       // su sesión entre recargas.
+      //
+      // A2 (2026-07-30): tokenTurno entra en la misma exclusión — es la
+      // ficha que las RPC de campo van a exigir, y vive solo en memoria.
       partialize: (state) =>
         state.rol === 'encargado'
           ? {
               rol: null, userId: null, nombre: null, codigoCorto: null,
-              vehiculoActivoId: null, vehiculoActivoNombre: null
+              vehiculoActivoId: null, vehiculoActivoNombre: null, tokenTurno: null
             }
           : state
     }

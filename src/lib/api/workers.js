@@ -69,7 +69,10 @@ export async function listarTrabajadores({ periodo = 'todos', busqueda = '' } = 
  * Funciona tanto para admin (query directa, todos los campos)
  * como para encargado (RPC SECURITY DEFINER, solo campos básicos).
  */
-export async function getTrabajadorPorId(id) {
+// A2 (2026-07-30): tokenTurno opcional — el fallback a la RPC solo lo
+// exige un rol sin sesión (encargado); el admin siempre resuelve por la
+// query directa de arriba y nunca llega a este branch.
+export async function getTrabajadorPorId(id, tokenTurno = null) {
   const valor = String(id).trim()
   // Si es solo dígitos, se trata del codigo_corto; si no, es el UUID
   const esCodigoCorto = /^\d+$/.test(valor)
@@ -97,7 +100,9 @@ export async function getTrabajadorPorId(id) {
 
   // Intento 2: RPC con SECURITY DEFINER — funciona para anónimos (encargado)
   const rpcName   = esCodigoCorto ? 'get_empleado_por_codigo' : 'get_empleado_por_id'
-  const rpcParams = esCodigoCorto ? { p_codigo: valorConsulta } : { p_empleado_id: valorConsulta }
+  const rpcParams = esCodigoCorto
+    ? { p_token_turno: tokenTurno, p_codigo: valorConsulta }
+    : { p_token_turno: tokenTurno, p_empleado_id: valorConsulta }
 
   const { data: rpcData, error: rpcError } = await supabase.rpc(rpcName, rpcParams)
 

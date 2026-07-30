@@ -54,8 +54,11 @@ const mapPago = (r) => ({
 // Registro de la jornada de un empleado normal (encargado, anónimo).
 // `fecha` es la fecha elegida en el calendario del encargado (YYYY-MM-DD);
 // si no se manda, la RPC usa CURRENT_DATE por default.
-export async function registrarJornadaEmpleado({ empleadoId, encargadoId, horas, destajo = 0, fecha }) {
+// A2 (2026-07-30): exige tokenTurno — sin él, la RPC rechaza antes de
+// tocar nada.
+export async function registrarJornadaEmpleado({ tokenTurno, empleadoId, encargadoId, horas, destajo = 0, fecha }) {
   const { data, error } = await supabase.rpc('registrar_jornada_empleado', {
+    p_token_turno:  tokenTurno,
     p_empleado_id:  empleadoId,
     p_encargado_id: encargadoId,
     p_horas:        horas,
@@ -72,8 +75,13 @@ export async function registrarJornadaEmpleado({ empleadoId, encargadoId, horas,
 // H-04 (2026-07-29): la RPC ahora exige y valida el PIN del lado del
 // servidor, para que no se pueda invocar directamente desde la consola
 // saltándose login_encargado. Se pasa el mismo PIN que ya se usó ahí.
-export async function iniciarJornadaEncargado({ encargadoId, furgonetaId, pin }) {
+//
+// A2 (2026-07-30): también exige tokenTurno — la ficha que devolvió
+// login_encargado, prueba de que esa llamada sí ocurrió. Sin ella, la RPC
+// rechaza antes de validar nada más.
+export async function iniciarJornadaEncargado({ tokenTurno, encargadoId, furgonetaId, pin }) {
   const { data, error } = await supabase.rpc('iniciar_jornada_encargado', {
+    p_token_turno:  tokenTurno,
     p_encargado_id: encargadoId,
     p_furgoneta_id: furgonetaId,
     p_pin:          pin,
@@ -83,8 +91,11 @@ export async function iniciarJornadaEncargado({ encargadoId, furgonetaId, pin })
 }
 
 // Cierre del turno del encargado: rellena sus horas/destajo y sella el día.
-export async function cerrarJornadaEncargado({ encargadoId, horas, destajo = 0 }) {
+// A2 (2026-07-30): exige tokenTurno — sin él, la RPC rechaza antes de
+// tocar nada.
+export async function cerrarJornadaEncargado({ tokenTurno, encargadoId, horas, destajo = 0 }) {
   const { data, error } = await supabase.rpc('cerrar_jornada_encargado', {
+    p_token_turno:  tokenTurno,
     p_encargado_id: encargadoId,
     p_horas:        horas,
     p_destajo:      destajo,
@@ -113,8 +124,11 @@ export async function getJornadasDelDia(fecha) {
  * Un total de pasajeros por furgoneta+día. Rellena la jornada de furgoneta
  * abierta del turno.
  */
-export async function registrarPlazasVehiculo({ vehiculoId, plazas }) {
+// A2 (2026-07-30): exige tokenTurno — sin él, la RPC rechaza antes de
+// tocar nada.
+export async function registrarPlazasVehiculo({ tokenTurno, vehiculoId, plazas }) {
   const { data, error } = await supabase.rpc('registrar_plazas_furgoneta', {
+    p_token_turno:  tokenTurno,
     p_furgoneta_id: vehiculoId,
     p_plazas:       plazas,
   })
@@ -129,9 +143,8 @@ export async function registrarPlazasVehiculo({ vehiculoId, plazas }) {
 // jornada_encargado — ver mapJornada/getJornadasTrabajador), porque el
 // listado del trabajador mezcla ambas tablas y hay que actualizar la que
 // realmente contiene esta jornada.
-export async function actualizarJornadaTrabajador(jornadaId, { horas, destajo, fecha, tabla = 'jornada_empleado' }) {
+export async function actualizarJornadaTrabajador(jornadaId, { horas, destajo, tabla = 'jornada_empleado' }) {
   const cambios = { horas_trabajadas: horas, pago_destajo: destajo }
-  if (fecha) cambios.fecha_trabajo = fecha
   const { data, error } = await supabase
     .from(tabla)
     .update(cambios)
@@ -305,9 +318,13 @@ export async function getJornadasTrabajador(empleadoId, limit = 60) {
 
 /* ─── Buscador de empleados del encargado ───── */
 
-export async function buscarEmpleadosEncargado(fecha) {
+// A2/H-06 (2026-07-30): exige tokenTurno — cierra el acceso anónimo puro
+// (antes cualquiera con la clave anon podía bajar nombre+teléfono de toda
+// la plantilla sin login). No filtra la lista: los empleados no están
+// atados a una furgoneta fija, así que el buscador sigue viendo a todos.
+export async function buscarEmpleadosEncargado(tokenTurno, fecha) {
   const { data, error } = await supabase
-    .rpc('buscar_empleados_encargado', { p_fecha: fecha })
+    .rpc('buscar_empleados_encargado', { p_token_turno: tokenTurno, p_fecha: fecha })
   if (error) throw new Error(error.message)
   // [{ id, nombre, telefono, codigo_corto, registrado, completo,
   //    jornada_id, horas_trabajadas, pago_destajo }]
@@ -317,9 +334,11 @@ export async function buscarEmpleadosEncargado(fecha) {
 // Estado propio del encargado en la fecha vista (excluido del buscador de
 // arriba). Usado para decidir si "Mis horas" debe crear, completar o solo
 // mostrar — ya no es un booleano, ahora trae la jornada completa (o vacía).
-export async function estadoJornadaPropiaEncargado(encargadoId, fecha) {
+// A2 (2026-07-30): exige tokenTurno — sin él, la RPC rechaza antes de
+// tocar nada.
+export async function estadoJornadaPropiaEncargado(tokenTurno, encargadoId, fecha) {
   const { data, error } = await supabase
-    .rpc('estado_jornada_propia_encargado', { p_encargado_id: encargadoId, p_fecha: fecha })
+    .rpc('estado_jornada_propia_encargado', { p_token_turno: tokenTurno, p_encargado_id: encargadoId, p_fecha: fecha })
   if (error) throw new Error(error.message)
   const r = Array.isArray(data) ? data[0] : data
   return r ?? { registrado: false, completo: false, jornada_id: null, horas_trabajadas: null, pago_destajo: null }
@@ -330,8 +349,11 @@ export async function estadoJornadaPropiaEncargado(encargadoId, fecha) {
 // fue_liquidado del lado del servidor, y que la jornada pertenezca al
 // encargado que llama (p_encargado_id) — nadie puede corregir el registro
 // de un empleado que no es suyo.
-export async function corregirJornadaEmpleado({ jornadaId, encargadoId, horas, destajo }) {
+// A2 (2026-07-30): exige tokenTurno — sin él, la RPC rechaza antes de
+// tocar nada.
+export async function corregirJornadaEmpleado({ tokenTurno, jornadaId, encargadoId, horas, destajo }) {
   const { error } = await supabase.rpc('corregir_jornada_empleado', {
+    p_token_turno:  tokenTurno,
     p_jornada_id:   jornadaId,
     p_encargado_id: encargadoId,
     p_horas:        horas,
@@ -343,8 +365,11 @@ export async function corregirJornadaEmpleado({ jornadaId, encargadoId, horas, d
 // Igual que corregirJornadaEmpleado, pero para la jornada propia del
 // encargado (jornada_encargado) ya cerrada — no dispara ningún cierre de
 // sesión, es una corrección pura. También exige que el turno sea suyo.
-export async function corregirJornadaEncargado({ jornadaId, encargadoId, horas, destajo }) {
+// A2 (2026-07-30): exige tokenTurno — sin él, la RPC rechaza antes de
+// tocar nada.
+export async function corregirJornadaEncargado({ tokenTurno, jornadaId, encargadoId, horas, destajo }) {
   const { error } = await supabase.rpc('corregir_jornada_encargado', {
+    p_token_turno:  tokenTurno,
     p_jornada_id:   jornadaId,
     p_encargado_id: encargadoId,
     p_horas:        horas,
@@ -420,12 +445,39 @@ export async function getAdelantosPendientes(empleadoId, fechaInicio, fechaFin) 
 
 // v6.0: el temporal solo se registra (tarifa por hora copiada de
 // configuracion_temporal). No genera jornada ni pago en el sistema.
-export async function registrarTemporal({ nombre, horas = 0, destajo }) {
+// A2 (2026-07-30): exige tokenTurno — sin él, la RPC rechaza antes de
+// tocar nada. Temporal no tiene FK a nadie, así que aquí el token solo
+// prueba que hay una sesión válida, sin poder atarlo a un encargado
+// específico (esta tabla no guarda encargado_id).
+export async function registrarTemporal({ tokenTurno, nombre, horas = 0, destajo }) {
   const { data, error } = await supabase.rpc('registrar_temporal', {
+    p_token_turno:     tokenTurno,
     p_nombre_completo: nombre,
     p_horas:           horas,
     p_destajo:         destajo,
   })
   if (error) throw new Error(error.message)
   return data   // uuid
+}
+
+/* ─── Panel "Registrados" del encargado: recarga desde el servidor ──
+   Ambas RPC derivan la furgoneta del token_turno ya validado (no de un
+   parámetro del cliente) y devuelven solo lo registrado por ESTA
+   furgoneta — así el panel sobrevive a salir y volver a entrar, en vez
+   de vivir solo en memoria del navegador. */
+export async function buscarJornadasFurgonetaDia(tokenTurno, fecha) {
+  const { data, error } = await supabase.rpc('buscar_jornadas_furgoneta_dia', {
+    p_token_turno: tokenTurno,
+    p_fecha:       fecha,
+  })
+  if (error) throw new Error(error.message)
+  return data ?? []   // [{ empleado_id, nombre_completo }]
+}
+
+export async function buscarTemporalesFurgonetaDia(tokenTurno) {
+  const { data, error } = await supabase.rpc('buscar_temporales_furgoneta_dia', {
+    p_token_turno: tokenTurno,
+  })
+  if (error) throw new Error(error.message)
+  return data ?? []   // [{ id, nombre_completo, horas_trabajadas, destajo }]
 }

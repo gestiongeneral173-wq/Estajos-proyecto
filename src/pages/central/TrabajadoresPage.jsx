@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, Plus, Search, KeyRound, Copy, Settings } from 'lucide-react'
+import { LogOut, Plus, Search, KeyRound, Copy, Settings, Trash2 } from 'lucide-react'
 
 import Header         from '../../components/layout/Header.jsx'
 import HorizontalNav  from '../../components/layout/HorizontalNav.jsx'
@@ -19,6 +19,10 @@ import {
   getConfiguracionEmpleado, actualizarTarifaInicial,
 } from '../../lib/api/workers.js'
 import { generarPinRegistro } from '../../lib/api/auth.js'
+import {
+  getConfiguracionTemporal, actualizarTarifaTemporal,
+  listarTemporales, eliminarTemporal, eliminarTodosLosTemporales,
+} from '../../lib/api/temporales.js'
 
 // IMPORTACIÓN IMPORTANTE: Direccion de constants.js : Para el uso de direcciones
 import { Direccion } from '../../utils/constants.js'
@@ -47,6 +51,7 @@ export default function TrabajadoresPage() {
   const [error, setError]               = useState(null)
   const [modalOpen, setModalOpen]       = useState(false)
   const [modalPin, setModalPin]         = useState(false)
+  const [modalTemporales, setModalTemporales] = useState(false)
 
   useEffect(() => {
     // [Vinculo Global] Se usa la ruta centralizada definida en constants.js ('/central/login')
@@ -92,6 +97,10 @@ export default function TrabajadoresPage() {
           <Button variant="dark" icon={<KeyRound className="w-4 h-4" />}
             className="mt-2" onClick={() => setModalPin(true)}>
             AUTORIZAR NUEVOS REGISTROS
+          </Button>
+          <Button variant="dark" icon={<Settings className="w-4 h-4" />}
+            className="mt-2" onClick={() => setModalTemporales(true)}>
+            CONFIGURAR TEMPORALES
           </Button>
         </Card>
 
@@ -143,6 +152,8 @@ export default function TrabajadoresPage() {
       />
 
       <ModalPinRegistro open={modalPin} onClose={() => setModalPin(false)} />
+
+      <ModalConfiguracionTemporal open={modalTemporales} onClose={() => setModalTemporales(false)} />
     </div>
   )
 }
@@ -285,6 +296,203 @@ function ModalPinRegistro({ open, onClose }) {
         )}
       </div>
     </Modal>
+  )
+}
+
+/* ─── Modal configuración de temporales ───
+   Tarifa de temporales (mismo bloque que la tarifa inicial de autoregistro,
+   otro origen de datos) + lista de temporales del día con purga automática
+   a la 1 AM y borrado manual (individual o "todos"), exclusivo del admin
+   por diseño (RLS: admin_temporal FOR ALL). */
+function ModalConfiguracionTemporal({ open, onClose }) {
+  const [tarifa, setTarifa]                 = useState('')
+  const [cargandoTarifa, setCargandoTarifa] = useState(false)
+  const [editandoTarifa, setEditandoTarifa] = useState(false)
+  const [savingTarifa, setSavingTarifa]     = useState(false)
+  const [tarifaError, setTarifaError]       = useState(null)
+  const [tarifaGuardada, setTarifaGuardada] = useState(false)
+
+  const [temporales, setTemporales]           = useState([])
+  const [cargandoTemporales, setCargandoTemporales] = useState(false)
+  const [temporalesError, setTemporalesError] = useState(null)
+
+  const [confirmando, setConfirmando]       = useState(null) // id | 'todos'
+  const [eliminando, setEliminando]         = useState(false)
+  const [eliminarError, setEliminarError]   = useState(null)
+
+  const cargarTemporales = () => {
+    setCargandoTemporales(true); setTemporalesError(null)
+    return listarTemporales()
+      .then(setTemporales)
+      .catch((err) => setTemporalesError(err.message))
+      .finally(() => setCargandoTemporales(false))
+  }
+
+  useEffect(() => {
+    if (!open) return
+    setCargandoTarifa(true); setTarifaError(null)
+    getConfiguracionTemporal()
+      .then((c) => setTarifa(c ? String(c.tarifa_hora_temporal) : ''))
+      .catch((err) => setTarifaError(err.message))
+      .finally(() => setCargandoTarifa(false))
+    cargarTemporales()
+  }, [open])
+
+  const tarifaValida = parseFloat(tarifa) > 0
+
+  const handleGuardarTarifa = async () => {
+    setTarifaError(null); setSavingTarifa(true)
+    try {
+      await actualizarTarifaTemporal(parseFloat(tarifa))
+      setEditandoTarifa(false)
+      setTarifaGuardada(true)
+      setTimeout(() => setTarifaGuardada(false), 1500)
+    } catch (err) { setTarifaError(err.message) } finally { setSavingTarifa(false) }
+  }
+
+  const handleConfirmarEliminar = async () => {
+    if (!confirmando) return
+    setEliminarError(null); setEliminando(true)
+    try {
+      if (confirmando === 'todos') {
+        await eliminarTodosLosTemporales()
+      } else {
+        await eliminarTemporal(confirmando)
+      }
+      setConfirmando(null)
+      await cargarTemporales()
+    } catch (err) {
+      setEliminarError(err.message)
+    } finally {
+      setEliminando(false)
+    }
+  }
+
+  const reset = () => { setEditandoTarifa(false); setConfirmando(null) }
+
+  return (
+    <>
+      <Modal open={open} title="Configurar temporales" onClose={() => { reset(); onClose() }}>
+        <div className="space-y-4">
+          {/* Tarifa de temporales — mismo bloque que la tarifa inicial de
+              autoregistro (ModalPinRegistro), otro origen de datos. */}
+          <div className="bg-gray-50 rounded-xl p-3">
+            {tarifaError && <p className="text-danger text-[10px] mb-2">{tarifaError}</p>}
+            {tarifaGuardada && <p className="text-primary text-[10px] mb-2">Tarifa actualizada.</p>}
+            {cargandoTarifa ? (
+              <p className="text-gray-400 text-xs">Cargando tarifa de temporales…</p>
+            ) : editandoTarifa ? (
+              <div className="space-y-2">
+                <Input
+                  label="Tarifa por hora (€)"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={tarifa}
+                  onChange={(e) => setTarifa(e.target.value)}
+                />
+                {tarifa !== '' && !tarifaValida && (
+                  <p className="text-danger text-[10px]">Debe ser mayor a 0.</p>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="outline" onClick={() => setEditandoTarifa(false)} disabled={savingTarifa}>
+                    CANCELAR
+                  </Button>
+                  <Button variant="primary" onClick={handleGuardarTarifa} disabled={savingTarifa || !tarifaValida}>
+                    {savingTarifa ? 'GUARDANDO…' : 'GUARDAR'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[9px] text-gray-400 uppercase">Tarifa de temporales</p>
+                  <p className="text-sm font-bold text-navy-dark">€{Number(tarifa || 0).toFixed(2)}/h</p>
+                </div>
+                <button onClick={() => setEditandoTarifa(true)} className="text-gray-400 hover:text-navy-dark">
+                  <Settings className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Lista de temporales registrados hoy */}
+          {temporalesError && <p className="text-danger text-xs">{temporalesError}</p>}
+          {eliminarError && <p className="text-danger text-xs">{eliminarError}</p>}
+          <div className="bg-gray-50 rounded-xl p-3">
+            <p className="text-[10px] text-gray-400 mb-2">
+              Se eliminan automáticamente todos los días a la 1:00 AM. Puedes eliminarlos
+              antes si lo necesitas.
+            </p>
+            {cargandoTemporales ? (
+              <p className="text-gray-400 text-xs text-center py-3">Cargando…</p>
+            ) : temporales.length === 0 ? (
+              <p className="text-gray-400 text-xs text-center py-3">Sin temporales registrados hoy.</p>
+            ) : (
+              <div className="space-y-1">
+                <div className="grid grid-cols-5 gap-1 pb-2 border-b border-gray-100">
+                  {['Nombre', 'Hora', 'Destajo', 'Pagado', ''].map((h, i) => (
+                    <p key={i} className="text-[9px] font-semibold text-gray-400 uppercase text-center first:text-left">{h}</p>
+                  ))}
+                </div>
+                {temporales.map((t) => {
+                  // Mismo cálculo que el Subtotal de "Nómina Actual" (TrabajadorDetallePage):
+                  // horas × tarifa + destajo. Para un temporal la tarifa suele ser 0
+                  // ("solo cobra por destajo"), así que en la práctica Pagado ≈ destajo.
+                  const pagado = Number(t.horas_trabajadas) * Number(t.trabajo_x_hora) + Number(t.destajo)
+                  return (
+                    <div key={t.id} className="grid grid-cols-5 gap-1 py-1.5 border-b border-gray-50 last:border-0 items-center">
+                      <p className="text-[10px] font-semibold text-navy-dark truncate">{t.nombre_completo}</p>
+                      <p className="text-[10px] text-center text-navy-dark">{t.horas_trabajadas}h</p>
+                      <p className="text-[10px] text-center text-navy-dark">€{Number(t.destajo).toFixed(2)}</p>
+                      <p className="text-[10px] text-center font-semibold text-primary">€{pagado.toFixed(2)}</p>
+                      <button onClick={() => setConfirmando(t.id)} className="flex justify-end text-gray-400 hover:text-danger">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {temporales.length > 0 && (
+              <Button variant="outline" className="mt-3 !border-danger !text-danger hover:!bg-danger hover:!text-white"
+                onClick={() => setConfirmando('todos')}>
+                ELIMINAR TODOS
+              </Button>
+            )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* Confirmación de borrado — mismo patrón que "Dar de baja" /
+          adelantos: nunca un confirm() nativo. */}
+      <Modal
+        open={!!confirmando}
+        title="Confirmar eliminación"
+        onClose={() => { if (!eliminando) setConfirmando(null) }}
+      >
+        <div className="space-y-4">
+          <p className="text-gray-600 text-sm">
+            {confirmando === 'todos'
+              ? '¿Eliminar todos los temporales registrados hoy? Esta acción no se puede deshacer.'
+              : '¿Eliminar este temporal? Esta acción no se puede deshacer.'}
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <Button variant="outline" onClick={() => setConfirmando(null)} disabled={eliminando}>
+              CANCELAR
+            </Button>
+            <Button
+              variant="outline"
+              className="!border-danger !text-danger hover:!bg-danger hover:!text-white"
+              onClick={handleConfirmarEliminar}
+              disabled={eliminando}
+            >
+              {eliminando ? 'ELIMINANDO…' : 'SÍ, ELIMINAR'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
   )
 }
 

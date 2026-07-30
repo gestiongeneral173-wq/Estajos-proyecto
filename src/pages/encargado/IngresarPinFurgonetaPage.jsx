@@ -45,13 +45,15 @@ export default function IngresarPinFurgonetaPage() {
       const r = await loginEncargado(telefono, pin)
       // v6.0: abre el turno (jornada de encargado + de furgoneta, en curso).
       // H-04: se reenvía el mismo PIN — el servidor lo vuelve a validar.
-      const turno = await iniciarJornadaEncargado({ encargadoId: r.empleado_id, furgonetaId: r.vehiculo_id, pin })
+      // A2: se reenvía también el token_turno recién emitido por el login.
+      const turno = await iniciarJornadaEncargado({ tokenTurno: r.token_turno, encargadoId: r.empleado_id, furgonetaId: r.vehiculo_id, pin })
       setAuth({
         rol:                  'encargado',
         userId:               r.empleado_id,
         nombre:               r.empleado_nombre,
         vehiculoActivoId:     r.vehiculo_id,
-        vehiculoActivoNombre: r.vehiculo_nombre
+        vehiculoActivoNombre: r.vehiculo_nombre,
+        tokenTurno:           r.token_turno
       })
       // Si el turno ya tenía plazas registradas (reingreso el mismo día),
       // no tiene caso volver a pedirlas — directo al panel.

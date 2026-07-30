@@ -17,7 +17,7 @@ export default function IngresarPinFurgonetaPage() {
   const navigate = useNavigate()
 
   // FIX 1: Leer el vehículo activo del authStore para mostrarlo como confirmación
-  const { userId, vehiculoActivoId, vehiculoActivoNombre, nombre: nombreEncargado } = useAuthStore()
+  const { userId, vehiculoActivoId, vehiculoActivoNombre, nombre: nombreEncargado, tokenTurno } = useAuthStore()
 
   const [plazas, setPlazas] = useState('')
   const [guardando, setGuardando] = useState(false)
@@ -30,6 +30,7 @@ export default function IngresarPinFurgonetaPage() {
     setError(null); setGuardando(true)
     try {
       await registrarPlazasVehiculo({
+        tokenTurno,
         vehiculoId: vehiculoActivoId,
         plazas: parseInt(plazas, 10),
       })
