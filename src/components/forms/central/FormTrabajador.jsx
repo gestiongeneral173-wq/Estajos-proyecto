@@ -13,6 +13,9 @@ const NOMBRE_RE = /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]*(?:\s[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'
  *  - saving: bool
  *  - error: string | null
  *  - onCancel: () => void   (solo se usa en modo editar)
+ *  - periodoPendiente: 'quincenal' | 'mensual' | null   (solo modo editar;
+ *      cambio de periodicidad ya guardado que se aplicará en el próximo
+ *      pago exitoso de este trabajador — ver promoverTipoPagoPendiente)
  */
 export default function FormTrabajador({
   modo = 'crear',
@@ -22,6 +25,7 @@ export default function FormTrabajador({
   saving,
   error,
   onCancel,
+  periodoPendiente,
 }) {
   // Nombre y apellido se piden por separado (para que no se pueda saltar o
   // meter cualquier cosa en un solo campo libre) pero se juntan en
@@ -95,6 +99,11 @@ export default function FormTrabajador({
           <option value="mensual">Mensual</option>
           <option value="quincenal">Quincenal</option>
         </select>
+        {periodoPendiente && periodoPendiente !== values.payment_period && (
+          <p className="text-[11px] text-amber-600 mt-1">
+            Cambiará a {periodoPendiente === 'mensual' ? 'Mensual' : 'Quincenal'} en su próximo pago.
+          </p>
+        )}
       </div>
 
       <Input

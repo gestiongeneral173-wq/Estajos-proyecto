@@ -191,6 +191,7 @@ export default function ResumenPage() {
           totalDevengado: e.totalDevengado,
           totalAdelantos: e.totalAdelantos,
           totalPagar: e.totalPagar,
+          periodoInicio: e.periodoInicioReal,
         })),
       })
       setSeleccionados(new Set())
@@ -270,11 +271,17 @@ export default function ResumenPage() {
   }
 
   // Días del período activo — eje de columnas de la planilla imprimible
-  // y de la exportación a Excel.
-  const diasDelPeriodo = useMemo(
-    () => diasEntre(datos.periodo?.inicio, datos.periodo?.fin),
-    [datos.periodo]
-  )
+  // y de la exportación a Excel. Arranca desde el `periodoInicioReal` más
+  // antiguo entre los empleados del ciclo (no siempre el inicio oficial):
+  // si alguien arrastra días de un ciclo anterior sin pagar, esas columnas
+  // también deben existir aquí, o su monto en el Total/Pagar no tendría
+  // ninguna fila que lo explique.
+  const diasDelPeriodo = useMemo(() => {
+    if (!datos.periodo) return []
+    const inicios = datos.empleados.map((e) => e.periodoInicioReal).filter(Boolean)
+    const inicio = inicios.length ? inicios.reduce((a, b) => (b < a ? b : a)) : datos.periodo.inicio
+    return diasEntre(inicio, datos.periodo.fin)
+  }, [datos.periodo, datos.empleados])
 
   const listaImpresa = listas.find((l) => l.id === listaAImprimir)
   const diasListaImpresa = useMemo(
@@ -378,7 +385,14 @@ export default function ResumenPage() {
                             ${seleccionados.has(e.id) ? 'bg-primary/10' : i % 2 ? 'bg-gray-50/60' : 'bg-white'}`}>
                           <input type="checkbox" checked={seleccionados.has(e.id)}
                             onChange={() => toggleSeleccion(e)} />
-                          <span className="text-navy-dark truncate">{e.nombre}</span>
+                          <span className="min-w-0">
+                            <span className="text-navy-dark truncate block">{e.nombre}</span>
+                            {/* Arrastre: este empleado tiene días/adelantos de un ciclo
+                                anterior sin pagar que se incluyen en este total. */}
+                            {e.periodoInicioReal < datos.periodo.inicio && (
+                              <span className="text-[9px] text-danger font-semibold">incluye ciclo anterior</span>
+                            )}
+                          </span>
                           <span className="text-right font-semibold text-navy-dark">€{e.totalPagar.toFixed(2)}</span>
                         </label>
                       ))}

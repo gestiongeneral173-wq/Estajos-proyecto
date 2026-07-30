@@ -20,7 +20,7 @@ import {
   actualizarMontoAdelantoVehiculo, eliminarAdelantoVehiculo,
 } from '../../lib/api/vehicles.js'
 import { getHistorialPagosVehiculo, ejecutarPagoVehiculo } from '../../lib/api/records.js'
-import { calcularPeriodoCiclo } from '../../lib/api/paymentLists.js'
+import { calcularPeriodoCiclo } from '../../lib/api/ciclos.js'
 import { useRealtime } from '../../hooks/useRealtime.js'
 import { Direccion, APP_CONFIG } from '../../utils/constants.js'
 

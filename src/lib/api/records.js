@@ -1,4 +1,5 @@
 import { supabase } from '../supabase.js'
+import { calcularPeriodoCiclo } from './ciclos.js'
 
 /**
  * ─── REGISTROS OPERATIVOS (esquema v6.0) ───────────────────
@@ -228,20 +229,41 @@ export async function getResumenGlobal() {
 }
 
 export async function getResumenPagos() {
-  // Devengado pendiente por ciclo (quincenal/mensual), sumando el trabajo de
-  // empleados normales y el propio de los encargados, neto de adelantos
-  // pendientes — mismo criterio que calcular_baja_empleado (workers.js) y
-  // que totalPagar en la Lista de Pago: sin restar adelantos esto mostraba
-  // el devengado BRUTO, inflado respecto a lo que realmente se paga.
+  // Devengado pendiente del ciclo ACTIVO (quincenal/mensual), sumando el
+  // trabajo de empleados normales y el propio de los encargados, neto de
+  // adelantos pendientes — mismo criterio que calcular_baja_empleado
+  // (workers.js) y que totalPagar en la Lista de Pago: sin restar adelantos
+  // esto mostraba el devengado BRUTO, inflado respecto a lo que realmente
+  // se paga.
+  //
+  // Acotado por fecha al ciclo activo de CADA tipo_pago (mismo cálculo que
+  // usa "Generar lista", vía calcularPeriodoCiclo — única fuente de verdad
+  // del ciclo). Solo se topa por el FIN del ciclo activo — nunca se cuenta
+  // algo fechado después (eso sí sería mezclar con un ciclo futuro). No hay
+  // límite inferior a propósito: si a alguien se le quedó un ciclo anterior
+  // sin pagar, ese arrastre se liquida junto con el ciclo activo (ver
+  // getDatosCicloParaPago / "Generar lista"), así que también debe seguir
+  // sumando aquí hasta que se le pague — si se topara también por abajo,
+  // ese dinero desaparecería del contador sin haberse cobrado nunca.
+  const periodos = {
+    quincenal: calcularPeriodoCiclo('quincenal'),
+    mensual:   calcularPeriodoCiclo('mensual'),
+  }
+  const dentroDelCiclo = (fecha, tipo) => {
+    const p = periodos[tipo]
+    if (!p || !fecha) return false
+    return soloFecha(fecha) <= p.fin
+  }
+
   const [emp, enc, adelantos] = await Promise.all([
     supabase.from('jornada_empleado')
-      .select('horas_trabajadas, pago_destajo, tarifa_aplicada, empleado:empleado_id(tipo_pago, pago_x_hora)')
+      .select('horas_trabajadas, pago_destajo, tarifa_aplicada, fecha_trabajo, empleado:empleado_id(tipo_pago, pago_x_hora)')
       .eq('fue_liquidado', false),
     supabase.from('jornada_encargado')
-      .select('horas_trabajadas, pago_destajo, tarifa_aplicada, encargado:encargado_id(tipo_pago, pago_x_hora)')
+      .select('horas_trabajadas, pago_destajo, tarifa_aplicada, fecha_trabajo, encargado:encargado_id(tipo_pago, pago_x_hora)')
       .eq('fue_liquidado', false),
     supabase.from('adelanto_empleado')
-      .select('monto, empleado:empleado_id(tipo_pago)')
+      .select('monto, fecha_adelanto, empleado:empleado_id(tipo_pago)')
       .eq('fue_liquidado', false),
   ])
   if (emp.error) throw new Error(emp.error.message)
@@ -252,11 +274,13 @@ export async function getResumenPagos() {
   const sumar = (rows, joinKey) => {
     rows?.forEach((j) => {
       const e = j[joinKey]
+      const tipo = e?.tipo_pago
+      if (tipo !== 'quincenal' && tipo !== 'mensual') return
+      if (!dentroDelCiclo(j.fecha_trabajo, tipo)) return
       // Tarifa vigente cuando SE CREÓ la jornada, no la actual del empleado.
       const tarifa = j.tarifa_aplicada ?? e?.pago_x_hora ?? 0
       const total = Number(j.horas_trabajadas || 0) * Number(tarifa) + Number(j.pago_destajo || 0)
-      if (e?.tipo_pago === 'quincenal') resumen.quincenal += total
-      else if (e?.tipo_pago === 'mensual') resumen.mensual += total
+      resumen[tipo] += total
     })
   }
   sumar(emp.data, 'empleado')
@@ -264,8 +288,9 @@ export async function getResumenPagos() {
 
   adelantos.data?.forEach((a) => {
     const tipo = a.empleado?.tipo_pago
-    if (tipo === 'quincenal') resumen.quincenal -= Number(a.monto || 0)
-    else if (tipo === 'mensual') resumen.mensual -= Number(a.monto || 0)
+    if (tipo !== 'quincenal' && tipo !== 'mensual') return
+    if (!dentroDelCiclo(a.fecha_adelanto, tipo)) return
+    resumen[tipo] -= Number(a.monto || 0)
   })
 
   return resumen
@@ -379,10 +404,17 @@ export async function corregirJornadaEncargado({ tokenTurno, jornadaId, encargad
 }
 
 // Jornadas del empleado dentro de un período (para listas de pago/planilla).
+// `fechaInicio` es opcional: si se omite (null/undefined), no hay límite
+// inferior — trae TODO lo no liquidado hasta `fechaFin`. Lo usa el "arrastre"
+// de ciclos cerrados sin pagar (ver getDatosCicloParaPago): el ciclo activo
+// debe poder liquidar también días de un ciclo anterior que se quedó sin
+// pagarle a este empleado, no solo los del ciclo oficial.
 export async function getJornadasTrabajadorPorPeriodo(empleadoId, fechaInicio, fechaFin) {
-  const rango = (q, campo) => q
-    .gte(campo, `${fechaInicio}T00:00:00`)
-    .lte(campo, `${fechaFin}T23:59:59.999`)
+  const rango = (q, campo) => {
+    let qq = q.lte(campo, `${fechaFin}T23:59:59.999`)
+    if (fechaInicio) qq = qq.gte(campo, `${fechaInicio}T00:00:00`)
+    return qq
+  }
 
   const [emp, enc] = await Promise.all([
     rango(supabase.from('jornada_empleado')
@@ -400,12 +432,16 @@ export async function getJornadasTrabajadorPorPeriodo(empleadoId, fechaInicio, f
   return [...(emp.data ?? []), ...(enc.data ?? [])].map(mapJornada)
 }
 
-export async function getPagoPorPeriodo(empleadoId, fechaInicio, fechaFin) {
+// Solo se filtra por `fecha_cierre_ciclo` (el fin de ciclo activo es
+// siempre el mismo para todos). El inicio real de un pago ya no es fijo —
+// con el arrastre de ciclos anteriores sin pagar, puede ser anterior al
+// inicio "oficial" del ciclo — así que exigir un match exacto de
+// fecha_inicio_ciclo aquí podía dar "no pagado" para un pago que sí ocurrió.
+export async function getPagoPorPeriodo(empleadoId, fechaFin) {
   const { data, error } = await supabase
     .from('pago_empleado')
     .select('id, total_pagado, created_at')
     .eq('empleado_id', empleadoId)
-    .eq('fecha_inicio_ciclo', fechaInicio)
     .eq('fecha_cierre_ciclo', fechaFin)
   if (error) throw new Error(error.message)
   return data?.[0] ?? null
@@ -428,15 +464,17 @@ export async function getHistorialPagosVehiculo(vehiculoId, retentionDays = 60) 
 // empleado en la BD — antes traía todos los adelantos pendientes sin
 // importar su fecha, y la planilla/Escanear restaban un total que la RPC
 // nunca iba a descontar en su totalidad.
+// `fechaInicio` opcional (ver getJornadasTrabajadorPorPeriodo): sin ella,
+// no hay límite inferior — necesario para el arrastre de ciclos cerrados.
 export async function getAdelantosPendientes(empleadoId, fechaInicio, fechaFin) {
-  const { data, error } = await supabase
+  let query = supabase
     .from('adelanto_empleado')
     .select('id, monto, fecha_adelanto, fue_liquidado, created_at')
     .eq('empleado_id', empleadoId)
     .eq('fue_liquidado', false)
-    .gte('fecha_adelanto', fechaInicio)
     .lte('fecha_adelanto', fechaFin)
-    .order('fecha_adelanto', { ascending: false })
+  if (fechaInicio) query = query.gte('fecha_adelanto', fechaInicio)
+  const { data, error } = await query.order('fecha_adelanto', { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []).map(mapAdelanto)
 }

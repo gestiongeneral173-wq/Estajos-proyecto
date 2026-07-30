@@ -1,6 +1,7 @@
 import { supabase } from '../supabase.js'
-import { listarTrabajadores } from './workers.js'
+import { listarTrabajadores, promoverTipoPagoPendiente } from './workers.js'
 import { getJornadasTrabajadorPorPeriodo, getAdelantosPendientes, ejecutarPago } from './records.js'
+import { calcularPeriodoCiclo } from './ciclos.js'
 
 /**
  * ─── LISTA DE PAGO (Cambio 1.4.1 · revisado en la Décima entrega) ───────
@@ -12,34 +13,23 @@ import { getJornadasTrabajadorPorPeriodo, getAdelantosPendientes, ejecutarPago }
  * encargado que reparte el efectivo. Aplica solo al ciclo quincenal.
  */
 
-// Mismo cálculo de período que EscanearPage, pero por ciclo (no por
-// empleado individual) — 1-15 / 16-fin de mes para quincenal, mes
-// calendario completo para mensual.
-export function calcularPeriodoCiclo(ciclo, fechaRef = new Date()) {
-  const year = fechaRef.getFullYear()
-  const month = fechaRef.getMonth()
-  const day = fechaRef.getDate()
-
-  if (ciclo === 'quincenal') {
-    const inicio = day <= 15
-      ? new Date(year, month, 1).toISOString().slice(0, 10)
-      : new Date(year, month, 16).toISOString().slice(0, 10)
-    const fin = day <= 15
-      ? new Date(year, month, 15).toISOString().slice(0, 10)
-      : new Date(year, month + 1, 0).toISOString().slice(0, 10)
-    return { inicio, fin, label: `${day <= 15 ? '1-15' : '16-fin'} ${fechaRef.toLocaleString('es-ES', { month: 'short', year: '2-digit' })}` }
-  }
-  return {
-    inicio: new Date(year, month, 1).toISOString().slice(0, 10),
-    fin:    new Date(year, month + 1, 0).toISOString().slice(0, 10),
-    label:  fechaRef.toLocaleString('es-ES', { month: 'long', year: 'numeric' })
-  }
-}
-
-// Trae los empleados del ciclo con sus jornadas y adelantos pendientes del
-// período activo, y los totales ya calculados (horas·tarifa + destajo −
-// adelantos). Base de datos compartida por la Planilla (1.4.2) y la Lista
-// de Pago (1.4.1): ambas muestran exactamente los mismos números.
+// Trae los empleados del ciclo con sus jornadas y adelantos pendientes
+// HASTA el fin del período activo (sin límite inferior — ver
+// getJornadasTrabajadorPorPeriodo), y los totales ya calculados
+// (horas·tarifa + destajo − adelantos). Base de datos compartida por la
+// Planilla (1.4.2) y la Lista de Pago (1.4.1): ambas muestran exactamente
+// los mismos números.
+//
+// Arrastre de ciclos cerrados sin pagar: si un empleado tiene jornadas o
+// adelantos de ANTES del inicio oficial del ciclo (un ciclo anterior que se
+// cerró sin liquidarle), igual entran aquí — así el admin los ve y los paga
+// junto con el ciclo activo, en vez de quedar invisibles para siempre. Por
+// eso se calcula `periodoInicioReal`: la fecha más antigua realmente
+// pendiente de este empleado (o el inicio oficial si no hay arrastre). Es la
+// que se le debe pasar a `ejecutarPago` — el RPC del servidor solo liquida
+// lo que cae en `[p_inicio, p_fin]`, así que si aquí se le cobra al admin
+// ese arrastre pero al pagar se le manda el inicio oficial (más tarde), esos
+// días viejos nunca se marcarían como liquidados en el servidor.
 export async function getDatosCicloParaPago(ciclo) {
   const periodo = calcularPeriodoCiclo(ciclo)
   const empleados = await listarTrabajadores({ periodo: ciclo })
@@ -47,8 +37,8 @@ export async function getDatosCicloParaPago(ciclo) {
   const conDatos = await Promise.all(
     empleados.map(async (e) => {
       const [jornadas, adelantos] = await Promise.all([
-        getJornadasTrabajadorPorPeriodo(e.id, periodo.inicio, periodo.fin),
-        getAdelantosPendientes(e.id, periodo.inicio, periodo.fin),
+        getJornadasTrabajadorPorPeriodo(e.id, null, periodo.fin),
+        getAdelantosPendientes(e.id, null, periodo.fin),
       ])
       const totalHoras   = jornadas.reduce((s, j) => s + Number(j.horas), 0)
       // Cada jornada usa SU tarifa (snapshot al crearse), no la tarifa
@@ -58,6 +48,10 @@ export async function getDatosCicloParaPago(ciclo) {
         (s, j) => s + Number(j.horas) * (j.tarifa ?? e.tarifa_hora ?? 0) + Number(j.destajo), 0
       )
       const totalAdelantos = adelantos.reduce((s, a) => s + Number(a.monto), 0)
+
+      const fechas = [...jornadas.map((j) => j.fecha), ...adelantos.map((a) => a.fecha)].filter(Boolean)
+      const periodoInicioReal = fechas.length ? [...fechas, periodo.inicio].sort()[0] : periodo.inicio
+
       return {
         ...e,
         jornadas,
@@ -66,6 +60,7 @@ export async function getDatosCicloParaPago(ciclo) {
         totalDevengado,
         totalAdelantos,
         totalPagar: totalDevengado - totalAdelantos,
+        periodoInicioReal,
       }
     })
   )
@@ -86,7 +81,11 @@ export async function getDatosCicloParaPago(ciclo) {
 // quedaron liquidados y la lista queda registrada — se informa el error para
 // revisar. Mismo caveat que tenía la antigua confirmación de lista.
 //
-// items: [{ empleadoId, totalDevengado, totalAdelantos, totalPagar }]
+// items: [{ empleadoId, totalDevengado, totalAdelantos, totalPagar, periodoInicio }]
+// `periodoInicio` es el `periodoInicioReal` por empleado que devuelve
+// getDatosCicloParaPago (arrastre incluido) — nunca el inicio oficial del
+// ciclo a secas, o el RPC dejaría sin liquidar los días arrastrados que ya
+// se le cobraron al admin en pantalla.
 export async function generarListaPago({ ciclo, periodo, items, encargado }) {
   if (!items.length) throw new Error('Selecciona al menos un empleado.')
   if (!encargado || !encargado.trim()) throw new Error('Ingresa el nombre del encargado.')
@@ -95,9 +94,12 @@ export async function generarListaPago({ ciclo, periodo, items, encargado }) {
   for (const i of items) {
     const pago = await ejecutarPago({
       empleadoId: i.empleadoId,
-      periodoInicio: periodo.inicio,
+      periodoInicio: i.periodoInicio ?? periodo.inicio,
       periodoFin: periodo.fin,
     })
+    // Justo después de un pago exitoso: si este empleado tenía un cambio de
+    // periodicidad pendiente, aquí es donde entra en vigor (ver 2.1).
+    await promoverTipoPagoPendiente(i.empleadoId)
     liquidados.push({ ...i, totalPagar: pago.total_pagado })
   }
 

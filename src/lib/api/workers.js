@@ -21,7 +21,7 @@ import { supabase } from '../supabase.js'
 // tocar formularios ni páginas. Ya no hay `activo` (borrado físico): se
 // expone `activo: true` sintético para el código que aún lo lee.
 const SELECT_EMPLEADO =
-  'id, nombre:nombre_completo, telefono, codigo_corto, payment_period:tipo_pago, tarifa_hora:pago_x_hora, es_encargado'
+  'id, nombre:nombre_completo, telefono, codigo_corto, payment_period:tipo_pago, payment_period_pendiente:tipo_pago_pendiente, tarifa_hora:pago_x_hora, es_encargado'
 
 const conActivo = (e) => e && { ...e, activo: true }
 
@@ -29,11 +29,12 @@ const conActivo = (e) => e && { ...e, activo: true }
 // las columnas v6.0. Solo incluye las claves presentes (para updates).
 function aColumnasV6(datos) {
   const out = {}
-  if ('nombre' in datos)         out.nombre_completo = datos.nombre
-  if ('telefono' in datos)       out.telefono        = datos.telefono
-  if ('tarifa_hora' in datos)    out.pago_x_hora     = datos.tarifa_hora
-  if ('payment_period' in datos) out.tipo_pago       = datos.payment_period
-  if ('es_encargado' in datos)   out.es_encargado    = datos.es_encargado
+  if ('nombre' in datos)                   out.nombre_completo     = datos.nombre
+  if ('telefono' in datos)                 out.telefono            = datos.telefono
+  if ('tarifa_hora' in datos)              out.pago_x_hora         = datos.tarifa_hora
+  if ('payment_period' in datos)           out.tipo_pago           = datos.payment_period
+  if ('payment_period_pendiente' in datos) out.tipo_pago_pendiente = datos.payment_period_pendiente
+  if ('es_encargado' in datos)             out.es_encargado        = datos.es_encargado
   return out
 }
 
@@ -149,6 +150,52 @@ export async function actualizarTrabajador(id, datos) {
     .single()
   if (error) throw traducirErrorEmpleado(error)
   return conActivo(data)
+}
+
+/**
+ * Decide qué guardar en payment_period_pendiente dado el valor vigente, lo
+ * que ya estaba esperando, y lo que el admin acaba de elegir en el
+ * formulario. Nunca toca payment_period — eso solo lo hace
+ * promoverTipoPagoPendiente, y solo tras un pago exitoso.
+ */
+export function resolverPendientePeriodo(actual, pendiente, elegido) {
+  if (elegido === actual) return null   // revirtió al valor vigente → limpiar
+  return elegido                        // cualquier otro caso: guardar tal cual
+}
+
+/**
+ * Si el empleado tiene un cambio de periodicidad pendiente, lo aplica:
+ * payment_period pasa a valer lo que estaba en payment_period_pendiente, y
+ * el pendiente se limpia. Se llama únicamente justo después de que un pago
+ * a ese empleado se ejecutó con éxito — nunca antes, y nunca desde el flujo
+ * de baja (dar_de_baja_empleado borra la fila entera, no hay nada que
+ * promover).
+ *
+ * Best-effort a propósito: en este punto el pago ya ocurrió y es
+ * irreversible (dinero movido, jornadas liquidadas). Un fallo acá — el
+ * empleado se dio de baja en el ínterin, un hipo de red, lo que sea — nunca
+ * debe aparentar que el pago falló ni cortar el resto de un lote de pagos
+ * (generarListaPago no es atómico entre items). Si falla, el pendiente
+ * simplemente se queda esperando y se reintenta solo en el próximo pago.
+ */
+export async function promoverTipoPagoPendiente(empleadoId) {
+  try {
+    const { data, error } = await supabase
+      .from('empleados')
+      .select('payment_period_pendiente:tipo_pago_pendiente')
+      .eq('id', empleadoId)
+      .single()
+    if (error) throw error
+    if (!data.payment_period_pendiente) return null
+
+    return await actualizarTrabajador(empleadoId, {
+      payment_period:            data.payment_period_pendiente,
+      payment_period_pendiente:  null,
+    })
+  } catch (err) {
+    console.error(`No se pudo promover tipo_pago_pendiente de ${empleadoId}:`, err.message)
+    return null
+  }
 }
 
 // Baja con liquidación forzada — Fase A (solo lectura, se puede repetir).

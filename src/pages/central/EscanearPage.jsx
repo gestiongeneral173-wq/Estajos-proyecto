@@ -13,7 +13,7 @@ import Badge         from '../../components/ui/Badge.jsx'
 
 import { useAuthStore } from '../../store/authStore.js'
 import { logout }       from '../../lib/api/auth.js'
-import { getTrabajadorPorId } from '../../lib/api/workers.js'
+import { getTrabajadorPorId, promoverTipoPagoPendiente } from '../../lib/api/workers.js'
 import {
   registrarAdelanto, getJornadasTrabajadorPorPeriodo,
   getPagoPorPeriodo, getAdelantosPendientes, ejecutarPago
@@ -75,10 +75,15 @@ export default function EscanearPage() {
     try {
       const t = await getTrabajadorPorId(id.trim())
       const periodo = calcularPeriodo(t)
+      // Arrastre de ciclos cerrados sin pagar (mismo criterio que
+      // getDatosCicloParaPago en la Lista de Pago): sin límite inferior,
+      // trae también días/adelantos de un ciclo anterior que se quedó sin
+      // liquidar a este empleado, para que "Pagar Empleado" también los
+      // cobre — nunca aplica solo al quincenal, sirve para ambos tipos.
       const [jorn, adel, pago] = await Promise.all([
-        getJornadasTrabajadorPorPeriodo(t.id, periodo.inicio, periodo.fin),
-        getAdelantosPendientes(t.id, periodo.inicio, periodo.fin),
-        getPagoPorPeriodo(t.id, periodo.inicio, periodo.fin),
+        getJornadasTrabajadorPorPeriodo(t.id, null, periodo.fin),
+        getAdelantosPendientes(t.id, null, periodo.fin),
+        getPagoPorPeriodo(t.id, periodo.fin),
       ])
       setTrabajador(t)
       setJornadas(jorn)
@@ -150,6 +155,16 @@ export default function EscanearPage() {
   const periodo = trabajador ? calcularPeriodo(trabajador) : null
   const totalDias = jornadas.reduce((s, j) => s + (j.horas * (trabajador?.tarifa_hora || 0) + Number(j.destajo)), 0)
   const totalAdelantos = adelantos.reduce((s, a) => s + Number(a.monto), 0)
+
+  // Arrastre de ciclo anterior sin pagar (mismo criterio que
+  // getDatosCicloParaPago): fecha más antigua realmente pendiente, o el
+  // inicio oficial del ciclo si no hay arrastre. Es la que hay que pasarle
+  // a ejecutarPago — el RPC solo liquida lo que cae en [p_inicio, p_fin].
+  const periodoInicioReal = (() => {
+    if (!periodo) return null
+    const fechas = [...jornadas.map((j) => j.fecha), ...adelantos.map((a) => a.fecha)].filter(Boolean)
+    return fechas.length ? [...fechas, periodo.inicio].sort()[0] : periodo.inicio
+  })()
 
   return (
     <div className="min-h-screen bg-app-bg">
@@ -271,6 +286,7 @@ export default function EscanearPage() {
               <SeccionPagar
                 trabajador={trabajador}
                 periodo={periodo}
+                periodoInicioReal={periodoInicioReal}
                 jornadas={jornadas}
                 totalDias={totalDias}
                 totalAdelantos={totalAdelantos}
@@ -366,6 +382,9 @@ function SeccionPagar({ trabajador, periodo, jornadas, totalDias, totalAdelantos
     setError(null); setPaying(true)
     try {
       await ejecutarPago({ empleadoId: trabajador.id, periodoInicio: periodo.inicio, periodoFin: periodo.fin })
+      // Justo después de un pago exitoso: si tenía un cambio de
+      // periodicidad pendiente, aquí es donde entra en vigor.
+      await promoverTipoPagoPendiente(trabajador.id)
       onPaid()
       onBack()
     } catch (err) { setError(err.message) } finally { setPaying(false) }

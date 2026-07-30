@@ -22,7 +22,8 @@ import {
   actualizarTrabajador,
   calcularBajaTrabajador,
   darDeBajaTrabajador,
-  getBalanceTrabajador
+  getBalanceTrabajador,
+  resolverPendientePeriodo
 } from '../../lib/api/workers.js'
 import {
   getHistorialPagos,
@@ -34,7 +35,7 @@ import {
   eliminarAdelantoEmpleado,
 } from '../../lib/api/records.js'
 import { useRealtime } from '../../hooks/useRealtime.js'
-import { calcularPeriodoCiclo } from '../../lib/api/paymentLists.js'
+import { calcularPeriodoCiclo } from '../../lib/api/ciclos.js'
 
 //Importamos Direccion de constants.js  : Para el uso de direcciones
 import { Direccion } from '../../utils/constants.js'
@@ -177,12 +178,24 @@ export default function TrabajadorDetallePage() {
   const handleGuardarEdit = async () => {
     setSavingEdit(true); setEditError(null)
     try {
-      await actualizarTrabajador(id, {
-        nombre:         formEdit.nombre.trim(),
-        telefono:       formEdit.telefono.trim(),
-        payment_period: formEdit.payment_period,
-        tarifa_hora:    parseFloat(formEdit.tarifa_hora) || 0,
-      })
+      const patch = {
+        nombre:      formEdit.nombre.trim(),
+        telefono:    formEdit.telefono.trim(),
+        tarifa_hora: parseFloat(formEdit.tarifa_hora) || 0,
+      }
+
+      // payment_period ya no se escribe directo aquí: solo su versión
+      // "pendiente", que se aplica de verdad recién en el próximo pago
+      // exitoso de este trabajador (ver promoverTipoPagoPendiente).
+      const pendienteActual = trabajador.payment_period_pendiente ?? null
+      const pendienteNuevo  = resolverPendientePeriodo(
+        trabajador.payment_period, pendienteActual, formEdit.payment_period
+      )
+      if (pendienteNuevo !== pendienteActual) {
+        patch.payment_period_pendiente = pendienteNuevo
+      }
+
+      await actualizarTrabajador(id, patch)
       await cargar()
       setEditando(false)
     } catch (err) { setEditError(err.message) }
@@ -405,6 +418,7 @@ export default function TrabajadorDetallePage() {
               saving={savingEdit}
               error={editError}
               onCancel={() => { setEditando(false); setEditError(null) }}
+              periodoPendiente={trabajador.payment_period_pendiente}
             />
           </Card>
         )}
