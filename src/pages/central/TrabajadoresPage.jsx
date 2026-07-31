@@ -253,10 +253,11 @@ function ModalPinRegistro({ open, onClose }) {
             el código, para que no ocurra el error de generarlo sin revisar
             a cuánto quedará pagado el que se autoregistre. */}
         <div className="bg-gray-50 rounded-xl p-3">
+          <p className="text-[9px] text-gray-400 uppercase mb-2">Tarifa inicial de autoregistro</p>
           {tarifaError && <p className="text-danger text-[10px] mb-2">{tarifaError}</p>}
           {tarifaGuardada && <p className="text-primary text-[10px] mb-2">Tarifa actualizada.</p>}
           {cargandoTarifa ? (
-            <p className="text-gray-400 text-xs">Cargando tarifa inicial…</p>
+            <p className="text-gray-400 text-xs">Cargando…</p>
           ) : editandoTarifa ? (
             <div className="space-y-2">
               <Input
@@ -281,10 +282,7 @@ function ModalPinRegistro({ open, onClose }) {
             </div>
           ) : (
             <div className="flex items-center justify-between">
-              <div>
-                <p className="text-[9px] text-gray-400 uppercase">Tarifa inicial de autoregistro</p>
-                <p className="text-sm font-bold text-navy-dark">€{Number(tarifa || 0).toFixed(2)}/h</p>
-              </div>
+              <p className="text-sm font-bold text-navy-dark">€{Number(tarifa || 0).toFixed(2)}/h</p>
               <button onClick={() => setEditandoTarifa(true)} className="text-gray-400 hover:text-navy-dark">
                 <Settings className="w-4 h-4" />
               </button>
@@ -292,43 +290,45 @@ function ModalPinRegistro({ open, onClose }) {
           )}
         </div>
 
-        {error && <p className="text-danger text-xs">{error}</p>}
-
-        {!pin ? (
-          <>
-            <p className="text-gray-500 text-xs">
-              Cada uso del PIN descontará un cupo disponible. Al agotarse los
-              cupos, el código se desactivará de forma automática.
-            </p>
-            <Input
-              label="¿Cuántos empleados se registrarán?"
-              type="number"
-              value={cupo}
-              onChange={(e) => setCupo(e.target.value)}
-            />
-            <Button variant="primary" onClick={handleGenerar}
-              disabled={saving || !cupo || parseInt(cupo, 10) <= 0}>
-              {saving ? 'GENERANDO…' : 'GENERAR CÓDIGO'}
-            </Button>
-          </>
-        ) : (
-          <div className="text-center space-y-3">
-            <p className="text-gray-500 text-xs">Comparte este código con los nuevos empleados:</p>
-            <div className="bg-gold/10 border border-gold/30 rounded-xl py-4">
-              <p className="text-3xl font-bold tracking-widest text-navy-dark">{pin.pin}</p>
+        <div className="bg-gray-50 rounded-xl p-3">
+          <p className="text-[9px] text-gray-400 uppercase mb-2">Generar código</p>
+          {error && <p className="text-danger text-xs mb-2">{error}</p>}
+          {!pin ? (
+            <div className="space-y-3">
+              <p className="text-gray-500 text-xs">
+                Cada uso del PIN descontará un cupo disponible. Al agotarse los
+                cupos, el código se desactivará de forma automática.
+              </p>
+              <Input
+                label="¿Cuántos empleados se registrarán?"
+                type="number"
+                value={cupo}
+                onChange={(e) => setCupo(e.target.value)}
+              />
+              <Button variant="primary" onClick={handleGenerar}
+                disabled={saving || !cupo || parseInt(cupo, 10) <= 0}>
+                {saving ? 'GENERANDO…' : 'GENERAR CÓDIGO'}
+              </Button>
             </div>
-            <p className="text-[10px] text-gray-400">
-              {pin.cupo_total} cupos · válido 24 h · se desactiva solo al agotarse
-            </p>
-            <Button variant="dark" icon={<Copy className="w-4 h-4" />}
-              onClick={() => navigator.clipboard?.writeText(pin.pin)}>
-              COPIAR CÓDIGO
-            </Button>
-            <button onClick={reset} className="w-full text-gray-500 text-xs">
-              Generar otro
-            </button>
-          </div>
-        )}
+          ) : (
+            <div className="text-center space-y-3">
+              <p className="text-gray-500 text-xs">Comparte este código con los nuevos empleados:</p>
+              <div className="bg-gold/10 border border-gold/30 rounded-xl py-4">
+                <p className="text-3xl font-bold tracking-widest text-navy-dark">{pin.pin}</p>
+              </div>
+              <p className="text-[10px] text-gray-400">
+                {pin.cupo_total} cupos · válido 24 h · se desactiva solo al agotarse
+              </p>
+              <Button variant="dark" icon={<Copy className="w-4 h-4" />}
+                onClick={() => navigator.clipboard?.writeText(pin.pin)}>
+                COPIAR CÓDIGO
+              </Button>
+              <button onClick={reset} className="w-full text-gray-500 text-xs">
+                Generar otro
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Lista de PINs activos — sigue mostrando el código en texto (por
             si no se copió a tiempo) y cuántos ya se registraron con él. */}
