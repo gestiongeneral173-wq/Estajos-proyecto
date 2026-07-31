@@ -18,6 +18,7 @@ import {
   registrarAdelanto, getJornadasTrabajadorPorPeriodo,
   getPagoPorPeriodo, getAdelantosPendientes, ejecutarPago
 } from '../../lib/api/records.js'
+import { calcularPeriodoCiclo } from '../../lib/api/ciclos.js'
 import { PAYMENT_PERIOD_LABELS, Direccion } from '../../utils/constants.js'
 
 /**
@@ -47,34 +48,16 @@ export default function EscanearPage() {
     if (rol !== 'admin') navigate(Direccion.centralLogin, { replace: true })
   }, [rol, navigate])
 
-  const calcularPeriodo = (t) => {
-    const hoy = new Date()
-    const year = hoy.getFullYear()
-    const month = hoy.getMonth()
-    const day = hoy.getDate()
-
-    if (t.payment_period === 'quincenal') {
-      const inicio = day <= 15
-        ? new Date(year, month, 1).toISOString().slice(0, 10)
-        : new Date(year, month, 16).toISOString().slice(0, 10)
-      const fin = day <= 15
-        ? new Date(year, month, 15).toISOString().slice(0, 10)
-        : new Date(year, month + 1, 0).toISOString().slice(0, 10)
-      return { inicio, fin, label: `${day <= 15 ? '1-15' : '16-fin'} ${hoy.toLocaleString('es-ES', { month: 'short', year: '2-digit' })}` }
-    }
-    // mensual (default)
-    return {
-      inicio: new Date(year, month, 1).toISOString().slice(0, 10),
-      fin:    new Date(year, month + 1, 0).toISOString().slice(0, 10),
-      label:  hoy.toLocaleString('es-ES', { month: 'long', year: 'numeric' })
-    }
-  }
-
   const cargarTrabajador = useCallback(async (id) => {
     setError(null)
     try {
       const t = await getTrabajadorPorId(id.trim())
-      const periodo = calcularPeriodo(t)
+      // Único cálculo de ciclo del sistema (ciclos.js) — antes esta pantalla
+      // tenía su propia copia de la regla de corte de días, separada de la
+      // que usan Resumen/Lista de Pago. Si algún día cambian los días de
+      // corte, ahora basta con tocar un solo lugar y los tres flujos de
+      // pago (Escanear, Generar Lista, Resumen) quedan sincronizados solos.
+      const periodo = calcularPeriodoCiclo(t.payment_period)
       // Arrastre de ciclos cerrados sin pagar (mismo criterio que
       // getDatosCicloParaPago en la Lista de Pago): sin límite inferior,
       // trae también días/adelantos de un ciclo anterior que se quedó sin
@@ -88,7 +71,15 @@ export default function EscanearPage() {
       setTrabajador(t)
       setJornadas(jorn)
       setAdelantos(adel)
-      setEsPagado(pago !== null)
+      // `pago !== null` ya no basta solo: getPagoPorPeriodo ahora solo
+      // compara fecha_cierre_ciclo (necesario para el arrastre), y ese fin
+      // puede coincidir por casualidad con un pago de OTRO ciclo — típico
+      // caso: a alguien se le paga su última quincena (16-31, cierre =
+      // fin de mes) y justo después se le pasa a mensual; su primer ciclo
+      // mensual (1-31) cierra el mismo día. Sin esta segunda condición, ese
+      // pago viejo marcaría "ya pagado" aunque tenga jornadas mensuales
+      // nuevas sin cobrar — y el botón de pagar quedaría bloqueado.
+      setEsPagado(pago !== null && jorn.length === 0 && adel.length === 0)
       setVista('menu')
       setEscaneando(false)
     } catch {
@@ -152,7 +143,7 @@ export default function EscanearPage() {
   const handleSalir = async () => { await logout(); clear(); navigate(Direccion.login) }
   const volverAEscanear = () => { setTrabajador(null); setError(null); setVista('menu') }
 
-  const periodo = trabajador ? calcularPeriodo(trabajador) : null
+  const periodo = trabajador ? calcularPeriodoCiclo(trabajador.payment_period) : null
   const totalDias = jornadas.reduce((s, j) => s + (j.horas * (trabajador?.tarifa_hora || 0) + Number(j.destajo)), 0)
   const totalAdelantos = adelantos.reduce((s, a) => s + Number(a.monto), 0)
 
@@ -165,6 +156,12 @@ export default function EscanearPage() {
     const fechas = [...jornadas.map((j) => j.fecha), ...adelantos.map((a) => a.fecha)].filter(Boolean)
     return fechas.length ? [...fechas, periodo.inicio].sort()[0] : periodo.inicio
   })()
+
+  // Bloqueo de pago anticipado — mismo criterio que Generar Lista
+  // (paymentLists.js): solo se desbloquea si hay arrastre de un bloque ya
+  // cerrado. Si todo lo pendiente es del bloque activo, se espera a que
+  // llegue su día de pago (se desbloquea solo, vía arrastre, ese día).
+  const puedePagar = periodo ? periodoInicioReal < periodo.inicio : false
 
   return (
     <div className="min-h-screen bg-app-bg">
@@ -287,6 +284,7 @@ export default function EscanearPage() {
                 trabajador={trabajador}
                 periodo={periodo}
                 periodoInicioReal={periodoInicioReal}
+                puedePagar={puedePagar}
                 jornadas={jornadas}
                 totalDias={totalDias}
                 totalAdelantos={totalAdelantos}
@@ -371,17 +369,26 @@ function SeccionAdelanto({ trabajador, adelantos, onSaved, onBack }) {
 }
 
 /* ─── Sub-vista: Pagar empleado (liquidación del ciclo) ─── */
-function SeccionPagar({ trabajador, periodo, jornadas, totalDias, totalAdelantos, esPagado, onPaid, onBack }) {
+function SeccionPagar({ trabajador, periodo, periodoInicioReal, puedePagar, jornadas, totalDias, totalAdelantos, esPagado, onPaid, onBack }) {
   const [error, setError] = useState(null)
   const [paying, setPaying] = useState(false)
 
   const totalAPagar = totalDias - totalAdelantos
+  const conArrastre = periodoInicioReal && periodoInicioReal < periodo.inicio
 
   const handlePagar = async () => {
     if (!confirm(`¿Confirmar pago de €${totalAPagar.toFixed(2)} a ${trabajador.nombre}?`)) return
     setError(null); setPaying(true)
     try {
-      await ejecutarPago({ empleadoId: trabajador.id, periodoInicio: periodo.inicio, periodoFin: periodo.fin })
+      // periodoInicioReal (no periodo.inicio): si trae días/adelantos
+      // arrastrados de un ciclo anterior sin pagar, el RPC solo los
+      // liquida si p_inicio los cubre — con el inicio "oficial" del ciclo
+      // esos días quedarían cobrados en pantalla pero sin pagar en la BD.
+      await ejecutarPago({
+        empleadoId: trabajador.id,
+        periodoInicio: periodoInicioReal ?? periodo.inicio,
+        periodoFin: periodo.fin,
+      })
       // Justo después de un pago exitoso: si tenía un cambio de
       // periodicidad pendiente, aquí es donde entra en vigor.
       await promoverTipoPagoPendiente(trabajador.id)
@@ -393,6 +400,16 @@ function SeccionPagar({ trabajador, periodo, jornadas, totalDias, totalAdelantos
   return (
     <Card>
       <SectionTitle color="green">Liquidación · {periodo.label}</SectionTitle>
+      {conArrastre && (
+        <p className="text-[10px] text-danger font-semibold mb-2">
+          Incluye días/adelantos pendientes de un ciclo anterior sin pagar.
+        </p>
+      )}
+      {!puedePagar && (
+        <p className="text-[10px] text-gray-400 font-semibold mb-2">
+          Pago anticipado bloqueado — disponible el {periodo.diaPago?.split('-').reverse().slice(0, 2).join('/')}.
+        </p>
+      )}
 
       {/* Tabla de días trabajados */}
       <div className="border border-gray-200 rounded-xl overflow-hidden">
@@ -430,8 +447,8 @@ function SeccionPagar({ trabajador, periodo, jornadas, totalDias, totalAdelantos
           VOLVER
         </Button>
         <Button variant="primary" onClick={handlePagar}
-          disabled={paying || esPagado || jornadas.length === 0}>
-          {esPagado ? 'YA PAGADO' : paying ? 'PAGANDO…' : 'CONFIRMAR PAGO'}
+          disabled={paying || esPagado || jornadas.length === 0 || !puedePagar}>
+          {esPagado ? 'YA PAGADO' : paying ? 'PAGANDO…' : !puedePagar ? 'BLOQUEADO' : 'CONFIRMAR PAGO'}
         </Button>
       </div>
     </Card>

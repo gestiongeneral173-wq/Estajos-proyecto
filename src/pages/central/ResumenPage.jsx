@@ -51,6 +51,14 @@ function diasEntre(inicio, fin) {
   return dias
 }
 
+// 'YYYY-MM-DD' menos N días — usado para topar cuánto puede ensancharse
+// hacia atrás la grilla de columnas de la planilla (ver diasDelPeriodo).
+function restarDias(iso, dias) {
+  const d = new Date(iso + 'T00:00:00')
+  d.setDate(d.getDate() - dias)
+  return d.toISOString().slice(0, 10)
+}
+
 // Cambio 1.4.3 / RF-018 (Octava llamada): "día/mes" numérico exacto para el
 // encabezado de cada columna del Excel — a diferencia de la planilla
 // imprimible (que usa el mes abreviado), el documento pide explícitamente
@@ -130,14 +138,21 @@ export default function ResumenPage() {
   // selector — la lista "se limpia a sí misma". Ya no hay estado
   // "pendiente" que bloquear: al generar, el pago se ejecuta al instante y
   // el empleado deja de tener saldo, saliendo solo del listado.
-  const empleadoSeleccionable = (e) => e.totalPagar > 0
+  //
+  // e.puedePagar (paymentLists.js): bloquea el pago anticipado — si TODO lo
+  // pendiente es del bloque activo y ese bloque no ha llegado a su día de
+  // pago, no se puede seleccionar todavía.
+  const empleadoSeleccionable = (e) => e.totalPagar > 0 && e.puedePagar
 
-  // Empleados disponibles para armar la lista: solo con saldo pendiente,
-  // filtrados por el buscador (Cambio Décima 1.2).
+  // Empleados disponibles para el listado: con saldo pendiente, filtrados
+  // por el buscador (Cambio Décima 1.2) — se muestran también los
+  // bloqueados por pago anticipado (checkbox deshabilitado, ver abajo), en
+  // vez de ocultarlos, para que el admin sepa que existen y cuándo se
+  // desbloquean.
   const empleadosDisponibles = useMemo(() => {
     const q = busqueda.trim().toLowerCase()
     return datos.empleados
-      .filter(empleadoSeleccionable)
+      .filter((e) => e.totalPagar > 0)
       .filter((e) => !q || e.nombre.toLowerCase().includes(q))
   }, [datos.empleados, busqueda])
 
@@ -271,16 +286,35 @@ export default function ResumenPage() {
   }
 
   // Días del período activo — eje de columnas de la planilla imprimible
-  // y de la exportación a Excel. Arranca desde el `periodoInicioReal` más
-  // antiguo entre los empleados del ciclo (no siempre el inicio oficial):
-  // si alguien arrastra días de un ciclo anterior sin pagar, esas columnas
-  // también deben existir aquí, o su monto en el Total/Pagar no tendría
-  // ninguna fila que lo explique.
+  // y de la exportación a Excel. Arranca desde la jornada más antigua entre
+  // los empleados del ciclo (no siempre el inicio oficial): si alguien
+  // arrastra días de un ciclo anterior sin pagar, esas columnas también
+  // deben existir aquí. A propósito solo mira fechas de JORNADAS, nunca de
+  // adelantos — la grilla solo pinta `e.jornadas` por día (los adelantos
+  // nunca se muestran por día, solo se suman en "Debe"), así que un
+  // adelanto viejo suelto ensanchaba la tabla con columnas que iban a
+  // quedar vacías para todos, sin mostrar nada útil.
+  //
+  // Tope: como máximo, un ciclo completo hacia atrás del inicio oficial (un
+  // ciclo entero de "colchón" para el arrastre normal). Sin esto, un solo
+  // empleado con una jornada arrastrada de hace mucho tiempo ensanchaba la
+  // tabla completa para todos, rompiendo el diseño del documento impreso.
+  // El dinero de esas jornadas más viejas sigue contando igual en el Total
+  // de su fila (eso no cambia) — solo dejan de tener columna de día propia,
+  // y esa fila lo marca con un aviso (ver `tieneArrastreFueraDeRango`).
   const diasDelPeriodo = useMemo(() => {
     if (!datos.periodo) return []
-    const inicios = datos.empleados.map((e) => e.periodoInicioReal).filter(Boolean)
-    const inicio = inicios.length ? inicios.reduce((a, b) => (b < a ? b : a)) : datos.periodo.inicio
-    return diasEntre(inicio, datos.periodo.fin)
+    const { inicio: inicioOficial, fin } = datos.periodo
+    const duracionCiclo = diasEntre(inicioOficial, fin).length
+    const topeInicio = restarDias(inicioOficial, duracionCiclo)
+
+    const fechasJornadas = datos.empleados.flatMap((e) => e.jornadas.map((j) => j.fecha))
+    const masAntigua = fechasJornadas.length
+      ? fechasJornadas.reduce((a, b) => (b < a ? b : a))
+      : inicioOficial
+    const inicio = masAntigua < topeInicio ? topeInicio : masAntigua
+
+    return diasEntre(inicio, fin)
   }, [datos.periodo, datos.empleados])
 
   const listaImpresa = listas.find((l) => l.id === listaAImprimir)
@@ -382,15 +416,22 @@ export default function ResumenPage() {
                       {empleadosDisponibles.map((e, i) => (
                         <label key={e.id}
                           className={`grid grid-cols-[auto_1fr_auto] gap-2 p-2 border-t border-gray-100 items-center text-xs
-                            ${seleccionados.has(e.id) ? 'bg-primary/10' : i % 2 ? 'bg-gray-50/60' : 'bg-white'}`}>
+                            ${!e.puedePagar ? 'opacity-50' : seleccionados.has(e.id) ? 'bg-primary/10' : i % 2 ? 'bg-gray-50/60' : 'bg-white'}`}>
                           <input type="checkbox" checked={seleccionados.has(e.id)}
+                            disabled={!e.puedePagar}
                             onChange={() => toggleSeleccion(e)} />
                           <span className="min-w-0">
                             <span className="text-navy-dark truncate block">{e.nombre}</span>
-                            {/* Arrastre: este empleado tiene días/adelantos de un ciclo
-                                anterior sin pagar que se incluyen en este total. */}
-                            {e.periodoInicioReal < datos.periodo.inicio && (
+                            {e.puedePagar ? (
+                              // Arrastre: este empleado tiene días/adelantos de un ciclo
+                              // anterior sin pagar que se incluyen en este total.
                               <span className="text-[9px] text-danger font-semibold">incluye ciclo anterior</span>
+                            ) : (
+                              // Pago anticipado bloqueado: todo lo pendiente es del
+                              // bloque activo, que todavía no llega a su día de pago.
+                              <span className="text-[9px] text-gray-400 font-semibold">
+                                disponible el {datos.periodo.diaPago?.split('-').reverse().slice(0, 2).join('/')}
+                              </span>
                             )}
                           </span>
                           <span className="text-right font-semibold text-navy-dark">€{e.totalPagar.toFixed(2)}</span>
@@ -521,11 +562,23 @@ function fmtHorasMin(h) {
   return `${horas}:${String(min).padStart(2, '0')}`
 }
 
+// Suma horas×tarifa jornada por jornada — cada una con SU tarifa_aplicada
+// histórica (nunca horas totales × tarifa actual del empleado, que puede
+// diferir si la tarifa cambió entre jornadas; más probable ahora que el
+// arrastre puede juntar jornadas de hace tiempo). Mismo criterio que ya usa
+// totalDevengado en getDatosCicloParaPago — así la columna "Destajo"
+// (Total − esto) siempre aísla el destajo real, nunca un residuo de
+// tarifas mal promediadas.
+function sumarHorasPorTarifa(jornadas, tarifaFallback) {
+  return (jornadas ?? []).reduce((s, j) => s + Number(j.horas) * (j.tarifa ?? tarifaFallback ?? 0), 0)
+}
+
 function PlanillaImprimible({ ciclo, periodo, empleados, dias, printVisible }) {
   if (!periodo) return null
 
   let totalGanado = 0
   let totalAdelantos = 0
+  let hayFueraDeRango = false
 
   return (
     <div className={`hidden p-4 ${printVisible ? 'print:block' : ''}`}>
@@ -554,12 +607,19 @@ function PlanillaImprimible({ ciclo, periodo, empleados, dias, printVisible }) {
           {empleados.map((e) => {
             const porDia = {}
             e.jornadas.forEach((j) => { porDia[j.fecha] = j })
-            const hPesos = e.totalHoras * (e.tarifa_hora || 0)
+            const hPesos = sumarHorasPorTarifa(e.jornadas, e.tarifa_hora)
             totalGanado += e.totalDevengado
             totalAdelantos += e.totalAdelantos
+            // El Total/Pagar de la fila sí incluye jornadas más viejas que
+            // el tope de columnas (diasDelPeriodo) — se avisa en el nombre
+            // para que no parezca que el número no cuadra con las columnas.
+            const tieneFueraDeRango = dias.length > 0 && e.jornadas.some((j) => j.fecha < dias[0].iso)
+            if (tieneFueraDeRango) hayFueraDeRango = true
             return (
               <tr key={e.id}>
-                <td className="border border-gray-300 p-1">{e.nombre}</td>
+                <td className="border border-gray-300 p-1">
+                  {e.nombre}{tieneFueraDeRango && ' *'}
+                </td>
                 {dias.map((d) => {
                   const j = porDia[d.iso]
                   return (
@@ -589,6 +649,11 @@ function PlanillaImprimible({ ciclo, periodo, empleados, dias, printVisible }) {
           </tr>
         </tbody>
       </table>
+      {hayFueraDeRango && (
+        <p className="mt-2 text-[9px] text-gray-500">
+          * Su Total incluye jornadas de fecha anterior a las columnas mostradas (arrastre de un ciclo cerrado).
+        </p>
+      )}
     </div>
   )
 }
@@ -637,7 +702,7 @@ function ListaPagoImprimible({ lista, items, dias, printVisible }) {
             const porDia = {}
             ;(it.jornadas ?? []).forEach((j) => { porDia[j.fecha] = j })
             const totalHoras = (it.jornadas ?? []).reduce((s, j) => s + Number(j.horas), 0)
-            const hPesos = totalHoras * (it.empleado?.tarifa_hora || 0)
+            const hPesos = sumarHorasPorTarifa(it.jornadas, it.empleado?.tarifa_hora)
             totalGanado += Number(it.total_devengado)
             totalAdelantos += Number(it.total_adelantos)
             return (

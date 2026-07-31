@@ -5,6 +5,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { Direccion } from './utils/constants.js'
 import { supabase } from './lib/supabase.js'
 import EmergencyScreen from './components/domain/EmergencyScreen.jsx'
+import InstallPWABanner from './components/domain/InstallPWABanner.jsx'
 
 import LoginPage         from './pages/LoginPage.jsx'
 import TrabajadorQRPage  from './pages/empleado/TrabajadorQRPage.jsx'
@@ -51,6 +52,7 @@ export default function App() {
   if (bloqueado) return <EmergencyScreen />
 
   return (
+    <>
     <Routes>
       {/* Redirección raíz usando tu variable */}
       <Route path="/" element={<Navigate to={Direccion.login} replace />} />
@@ -82,5 +84,7 @@ export default function App() {
       {/* Comodín de seguridad en caso de enlaces rotos */}
       <Route path="*" element={<Navigate to={Direccion.login} replace />} />
     </Routes>
+    <InstallPWABanner />
+    </>
   )
 }

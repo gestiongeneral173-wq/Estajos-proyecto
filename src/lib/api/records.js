@@ -432,6 +432,38 @@ export async function getJornadasTrabajadorPorPeriodo(empleadoId, fechaInicio, f
   return [...(emp.data ?? []), ...(enc.data ?? [])].map(mapJornada)
 }
 
+// Reconstrucción histórica del desglose día-por-día de una lista de pago YA
+// generada (para reimprimir). A diferencia de getJornadasTrabajadorPorPeriodo,
+// NO filtra por `fue_liquidado` — al momento de reimprimir, esas jornadas ya
+// están liquidadas (el pago se ejecuta al instante al generar la lista, no
+// queda estado "pendiente"), así que filtrar fue_liquidado=false siempre
+// traería vacío. No hay ningún FK que vincule una jornada al pago que la
+// liquidó (confirmado contra el esquema real), así que la única forma de
+// reconstruir "qué se pagó" es por rango de fechas — válido porque tanto las
+// jornadas liquidadas como la lista purgan a los 60 días por igual, nunca
+// hay una ventana donde la lista siga viva pero sus jornadas ya se hayan
+// purgado.
+export async function getJornadasTrabajadorHistorico(empleadoId, fechaInicio, fechaFin) {
+  const rango = (q, campo) => q
+    .gte(campo, `${fechaInicio}T00:00:00`)
+    .lte(campo, `${fechaFin}T23:59:59.999`)
+
+  const [emp, enc] = await Promise.all([
+    rango(supabase.from('jornada_empleado')
+      .select('id, fecha_trabajo, horas_trabajadas, pago_destajo, tarifa_aplicada')
+      .eq('empleado_id', empleadoId), 'fecha_trabajo')
+      .order('fecha_trabajo', { ascending: true }),
+    rango(supabase.from('jornada_encargado')
+      .select('id, fecha_trabajo, horas_trabajadas, pago_destajo, tarifa_aplicada')
+      .eq('encargado_id', empleadoId)
+      .not('fecha_trabajo', 'is', null), 'fecha_trabajo')
+      .order('fecha_trabajo', { ascending: true }),
+  ])
+  if (emp.error) throw new Error(emp.error.message)
+  if (enc.error) throw new Error(enc.error.message)
+  return [...(emp.data ?? []), ...(enc.data ?? [])].map(mapJornada)
+}
+
 // Solo se filtra por `fecha_cierre_ciclo` (el fin de ciclo activo es
 // siempre el mismo para todos). El inicio real de un pago ya no es fijo —
 // con el arrastre de ciclos anteriores sin pagar, puede ser anterior al

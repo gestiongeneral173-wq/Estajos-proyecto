@@ -1,6 +1,9 @@
 import { supabase } from '../supabase.js'
 import { listarTrabajadores, promoverTipoPagoPendiente } from './workers.js'
-import { getJornadasTrabajadorPorPeriodo, getAdelantosPendientes, ejecutarPago } from './records.js'
+import {
+  getJornadasTrabajadorPorPeriodo, getAdelantosPendientes, ejecutarPago,
+  getJornadasTrabajadorHistorico,
+} from './records.js'
 import { calcularPeriodoCiclo } from './ciclos.js'
 
 /**
@@ -52,6 +55,16 @@ export async function getDatosCicloParaPago(ciclo) {
       const fechas = [...jornadas.map((j) => j.fecha), ...adelantos.map((a) => a.fecha)].filter(Boolean)
       const periodoInicioReal = fechas.length ? [...fechas, periodo.inicio].sort()[0] : periodo.inicio
 
+      // Bloqueo de pago anticipado: solo se desbloquea si hay arrastre —
+      // algo fechado antes del inicio del bloque activo, es decir, de un
+      // bloque que YA cerró y tiene derecho a cobrarse ya. Si todo lo
+      // pendiente es del bloque en curso (periodoInicioReal === inicio),
+      // sigue bloqueado hasta que ese bloque llegue a su día de pago — lo
+      // cual pasa solo (sin ninguna comparación de fecha aparte): en cuanto
+      // el bloque activo avance, esas mismas fechas quedan antes del nuevo
+      // inicio y se vuelven arrastre.
+      const puedePagar = periodoInicioReal < periodo.inicio
+
       return {
         ...e,
         jornadas,
@@ -61,6 +74,7 @@ export async function getDatosCicloParaPago(ciclo) {
         totalAdelantos,
         totalPagar: totalDevengado - totalAdelantos,
         periodoInicioReal,
+        puedePagar,
       }
     })
   )
@@ -105,11 +119,22 @@ export async function generarListaPago({ ciclo, periodo, items, encargado }) {
 
   const totalMonto = liquidados.reduce((s, i) => s + i.totalPagar, 0)
 
+  // El inicio guardado en la lista se ensancha al más antiguo realmente
+  // usado entre sus items (arrastre incluido) — nunca el oficial a secas.
+  // Si se guardara siempre el oficial, reimprimir esta lista más tarde
+  // (getItemsListaPagoConJornadas, acotado a este mismo rango) dejaría
+  // fuera los días arrastrados de cualquier empleado que los tuviera,
+  // aunque su `total_pagado` sí los haya incluido.
+  const periodoInicioLista = liquidados.reduce(
+    (min, i) => (i.periodoInicio && i.periodoInicio < min ? i.periodoInicio : min),
+    periodo.inicio
+  )
+
   const { data: lista, error: errLista } = await supabase
     .from('lista_pago_quincenal')
     .insert({
       ciclo,
-      periodo_inicio: periodo.inicio,
+      periodo_inicio: periodoInicioLista,
       periodo_fin: periodo.fin,
       monto_total: totalMonto,
       encargado: encargado.trim(),
@@ -150,9 +175,13 @@ export async function getItemsListaPago(listaId) {
 }
 
 // Mismos items, con el detalle día-por-día de cada empleado para la
-// impresión (columnas de la planilla). Solo válido mientras la lista está
-// `pendiente`: al confirmar, `ejecutar_pago` cierra las jornadas
-// (`pagado_en`) y dejan de aparecer en `getJornadasTrabajadorPorPeriodo`.
+// impresión (columnas de la planilla). Esta lista ya fue pagada al
+// generarse (Cambio Décima: no hay estado "pendiente"), así que sus
+// jornadas ya están `fue_liquidado = true` — se reconstruyen por fecha con
+// getJornadasTrabajadorHistorico, no con la función de "pendientes".
+// `lista.periodo_inicio` ya viene ensanchado al arrastre real de cada
+// item (ver generarListaPago), así que este rango cubre exactamente lo
+// que se pagó, sin dejar días fuera.
 export async function getItemsListaPagoConJornadas(listaId) {
   const { data: lista, error: errLista } = await supabase
     .from('lista_pago_quincenal').select('periodo_inicio, periodo_fin').eq('id', listaId).single()
@@ -165,7 +194,7 @@ export async function getItemsListaPagoConJornadas(listaId) {
     // guard, un solo empleado borrado tumbaba el Promise.all completo y la
     // lista entera dejaba de mostrarse (aunque el resto de items sí tenía datos).
     jornadas: it.empleado
-      ? await getJornadasTrabajadorPorPeriodo(it.empleado.id, lista.periodo_inicio, lista.periodo_fin)
+      ? await getJornadasTrabajadorHistorico(it.empleado.id, lista.periodo_inicio, lista.periodo_fin)
       : [],
   })))
 }
