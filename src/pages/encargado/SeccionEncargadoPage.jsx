@@ -182,6 +182,13 @@ export default function SeccionEncargadoPage() {
   const registradosFecha = empleados.filter((e) => e.registrado && idsRegistradosSesion.has(e.id))
   const totalRegistrados = registradosFecha.length + (fechaBuscador === hoy ? temporalesSesion.length : 0)
 
+  // Furgoneta activa (la del PIN con el que se entró) ya cerrada — por
+  // cupo (empleados + temporales) o por "Termina mi día". `misFurgonetas`
+  // ya trae ese flag por furgoneta (RPC mis_furgonetas_hoy); mientras no
+  // haya cargado, se asume abierta (no bloquear de más antes de tener dato).
+  const furgonetaActiva = misFurgonetas.find((f) => f.furgoneta_id === vehiculoActivoId)
+  const furgonetaActivaCerrada = furgonetaActiva?.cerrada ?? false
+
   // Corrección retroactiva — estado de "Mis horas" para la fecha elegida:
   //  'crear'    → sin jornada hoy, turno abierto esperando el primer cierre
   //  'na'       → sin jornada en un día PASADO — nunca se trabajó ese día
@@ -275,6 +282,10 @@ export default function SeccionEncargadoPage() {
       // Cambio 2.3: los temporales no vienen del servidor; se agregan a la
       // lista local para que aparezcan en el panel de registrados.
       setTemporalesSesion((prev) => [...prev, { nombre: formData.nombre, hora: new Date() }])
+      // Un temporal también puede ser el que llene el cupo y cierre la
+      // furgoneta — refresca el panel visual para reflejarlo (antes solo
+      // se refrescaba tras registrar un empleado).
+      cargarMisFurgonetas()
       mostrarExito()
       setTimeout(() => {
         setExito(false); setTotalPagado(null); setModo('idle')
@@ -414,43 +425,67 @@ export default function SeccionEncargadoPage() {
           )}
         </Card>
 
-        {/* ── Búsqueda de jornada — calendario + buscador, plegable ──
-            Plegado por default para que la pantalla no abrume: el
-            encargado la abre solo cuando necesita buscar a alguien de su
-            equipo. Calendario propio (fechaBuscador), independiente del de
-            "Mis horas". */}
-        <Collapsible title="Búsqueda de jornada" color="green" defaultOpen={false}>
-          {/* Criterio 1: fecha de trabajo */}
-          <div className="flex items-center gap-3">
-            <CircleIcon icon={Calendar} size="md" />
-            <div className="flex-1">
-              <Input
-                label="Fecha de trabajo"
-                type="date"
-                max={hoy}
-                value={fechaBuscador}
-                onChange={(e) => { setFechaBuscador(e.target.value); setModo('idle'); setTrabajador(null) }}
-              />
+        {/* ── Furgoneta activa cerrada (cupo lleno o "Termina mi día") ──
+            Reemplaza a "Búsqueda de jornada": el RPC bloquea igual
+            cualquier alta en esta furgoneta sin importar la fecha elegida,
+            así que mostrar el buscador solo llevaría a un error confuso al
+            enviar. Solo bloquea esta furgoneta puntual — "Mis horas" no
+            depende de ninguna furgoneta y sigue disponible más abajo. */}
+        {furgonetaActivaCerrada && modo === 'idle' && !exito ? (
+          <Card className="!bg-amber-50 border border-amber-200">
+            <div className="flex items-center gap-2">
+              <Lock className="w-4 h-4 text-amber-600 flex-shrink-0" />
+              <p className="text-sm font-bold text-amber-700">
+                Esta furgoneta completó su cupo
+                {furgonetaActiva?.plazas_ocupadas != null
+                  ? ` (${furgonetaActiva.registrados_hoy}/${furgonetaActiva.plazas_ocupadas})`
+                  : ''} — turno cerrado
+              </p>
             </div>
-          </div>
-
-          {/* Criterio 2: buscador de empleado (mismo bloque, bajo la fecha) */}
-          {modo === 'idle' && !exito && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <div className="flex items-center gap-2 mb-2">
-                <Search className="w-3.5 h-3.5 text-gray-400" />
-                <p className="text-[10px] font-semibold text-gray-400 uppercase">
-                  Buscar empleado en esta fecha
-                </p>
+            <p className="mt-2 text-xs text-amber-700">
+              Ya no se pueden registrar más empleados ni temporales en esta furgoneta.
+              Si tenés otra furgoneta hoy, entrá con "Entrar a otra furgoneta".
+            </p>
+          </Card>
+        ) : (
+          /* ── Búsqueda de jornada — calendario + buscador, plegable ──
+              Plegado por default para que la pantalla no abrume: el
+              encargado la abre solo cuando necesita buscar a alguien de su
+              equipo. Calendario propio (fechaBuscador), independiente del de
+              "Mis horas". */
+          <Collapsible title="Búsqueda de jornada" color="green" defaultOpen={false}>
+            {/* Criterio 1: fecha de trabajo */}
+            <div className="flex items-center gap-3">
+              <CircleIcon icon={Calendar} size="md" />
+              <div className="flex-1">
+                <Input
+                  label="Fecha de trabajo"
+                  type="date"
+                  max={hoy}
+                  value={fechaBuscador}
+                  onChange={(e) => { setFechaBuscador(e.target.value); setModo('idle'); setTrabajador(null) }}
+                />
               </div>
-              <BuscadorEmpleado
-                empleados={empleados}
-                loading={cargando}
-                onSelect={handleSeleccionar}
-              />
             </div>
-          )}
-        </Collapsible>
+
+            {/* Criterio 2: buscador de empleado (mismo bloque, bajo la fecha) */}
+            {modo === 'idle' && !exito && (
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <div className="flex items-center gap-2 mb-2">
+                  <Search className="w-3.5 h-3.5 text-gray-400" />
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase">
+                    Buscar empleado en esta fecha
+                  </p>
+                </div>
+                <BuscadorEmpleado
+                  empleados={empleados}
+                  loading={cargando}
+                  onSelect={handleSeleccionar}
+                />
+              </div>
+            )}
+          </Collapsible>
+        )}
 
         {/* Aviso privacidad — informativo, sin acción, discreto */}
         <div className="p-3 bg-gray-50 rounded-xl">
@@ -463,15 +498,17 @@ export default function SeccionEncargadoPage() {
             del día completo, la acción más consecuente de la pantalla) ── */}
         {modo === 'idle' && !exito && (
           <>
-            <Collapsible title="Agregar empleado temporal" color="green" defaultOpen={false}>
-              <Button
-                variant="primary"
-                icon={<UserPlus className="w-4 h-4" />}
-                onClick={() => { setError(null); setModo('temporal') }}
-              >
-                Agregar empleado temporal
-              </Button>
-            </Collapsible>
+            {!furgonetaActivaCerrada && (
+              <Collapsible title="Agregar empleado temporal" color="green" defaultOpen={false}>
+                <Button
+                  variant="primary"
+                  icon={<UserPlus className="w-4 h-4" />}
+                  onClick={() => { setError(null); setModo('temporal') }}
+                >
+                  Agregar empleado temporal
+                </Button>
+              </Collapsible>
+            )}
 
             <Collapsible title="Mis horas" color="gold" defaultOpen={false}>
               <div className="flex items-center gap-3 mb-4">
