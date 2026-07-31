@@ -35,7 +35,7 @@ export default function FormRegistroConPin() {
 
   const nombreValido   = NOMBRE_RE.test(nombre.trim())   && nombre.trim().length >= 4
   const apellidoValido = NOMBRE_RE.test(apellido.trim()) && apellido.trim().length >= 4
-  const telefonoValido = telefono.length === 10
+  const telefonoValido = telefono.length >= 9 && telefono.length <= 15
 
   const handleValidar = async (e) => {
     e.preventDefault()
@@ -126,13 +126,13 @@ export default function FormRegistroConPin() {
             type="tel"
             inputMode="numeric"
             placeholder="Ej: 612345678"
-            maxLength={10}
+            maxLength={15}
             value={telefono}
-            onChange={(e) => setTelefono(e.target.value.replace(/\D/g, '').slice(0, 10))}
+            onChange={(e) => setTelefono(e.target.value.replace(/\D/g, '').slice(0, 15))}
             required
           />
           {telefono && !telefonoValido && (
-            <p className="text-danger text-[11px] -mt-2">Debe tener 10 dígitos.</p>
+            <p className="text-danger text-[11px] -mt-2">Debe tener entre 9 y 15 dígitos.</p>
           )}
           <Button type="submit" variant="primary"
             disabled={loading || !nombreValido || !apellidoValido || !telefonoValido}
