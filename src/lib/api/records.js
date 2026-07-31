@@ -640,3 +640,24 @@ export async function misFurgonetasHoy(tokenTurno) {
   if (error) throw new Error(error.message)
   return data ?? []   // [{ furgoneta_id, apodo, plazas_ocupadas, registrados_hoy, cerrada }]
 }
+
+/* ─── Rehacer registro de una furgoneta (Central, solo hoy) ─────────────
+ * Borra las jornada_empleado y la jornada_furgoneta de ESA furgoneta+
+ * encargado+día, y TAMBIÉN la jornada_encargado del día completo —
+ * decisión explícita del cliente: el "rehacer" debe alcanzar incluso al
+ * caso en que el encargado ya cerró su día ("Termina mi día"). No arrastra
+ * otras furgonetas que el mismo encargado haya tocado ese día
+ * (jornada_furgoneta no tiene FK hacia jornada_encargado, solo comparten
+ * encargado_id), pero si tenía otra furgoneta abierta, tendrá que
+ * re-declarar sus horas del día completo al volver a cerrarlo. La RPC
+ * rechaza si algo ya fue liquidado o si la fecha no es hoy.
+ */
+export async function reabrirJornadaFurgonetaDia({ encargadoId, furgonetaId, fecha }) {
+  const { data, error } = await supabase.rpc('reabrir_jornada_furgoneta_dia', {
+    p_encargado_id: encargadoId,
+    p_furgoneta_id: furgonetaId,
+    p_fecha:        fecha,
+  })
+  if (error) throw new Error(error.message)
+  return data   // { empleados_eliminados }
+}
