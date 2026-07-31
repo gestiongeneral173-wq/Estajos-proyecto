@@ -34,7 +34,7 @@ export default function FormTrabajador({
   const [apellido, setApellido] = useState('')
   const nombreValido   = NOMBRE_RE.test(nombre.trim())   && nombre.trim().length >= 4
   const apellidoValido = NOMBRE_RE.test(apellido.trim()) && apellido.trim().length >= 4
-  const telefonoValido = values.telefono?.length === 10
+  const telefonoValido = values.telefono?.length >= 9 && values.telefono?.length <= 15
   const tarifaValida   = parseFloat(values.tarifa_hora) > 0
 
   const actualizarNombreCompleto = (n, a) => {
@@ -81,12 +81,12 @@ export default function FormTrabajador({
         type="tel"
         inputMode="numeric"
         placeholder="Ej: 612345678"
-        maxLength={10}
+        maxLength={15}
         value={values.telefono}
-        onChange={(e) => onChange('telefono')({ target: { value: e.target.value.replace(/\D/g, '').slice(0, 10) } })}
+        onChange={(e) => onChange('telefono')({ target: { value: e.target.value.replace(/\D/g, '').slice(0, 15) } })}
       />
       {values.telefono && !telefonoValido && (
-        <p className="text-danger text-[11px]">Debe tener 10 dígitos.</p>
+        <p className="text-danger text-[11px]">Debe tener entre 9 y 15 dígitos.</p>
       )}
 
       <div>

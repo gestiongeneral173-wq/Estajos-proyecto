@@ -128,7 +128,10 @@ function traducirErrorEmpleado(error) {
   if (error.code === '23505' || error.message?.includes('empleados_telefono_key')) {
     return new Error('Ya existe un trabajador registrado con este número de teléfono.')
   }
-  if (error.code === '23514' || error.message?.includes('pago_x_hora')) {
+  if (error.message?.includes('empleados_telefono_formato')) {
+    return new Error('El teléfono debe tener entre 9 y 15 dígitos.')
+  }
+  if (error.message?.includes('pago_x_hora')) {
     return new Error('La tarifa por hora debe ser mayor a 0.')
   }
   return new Error(error.message)

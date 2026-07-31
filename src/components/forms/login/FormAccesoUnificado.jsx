@@ -27,7 +27,7 @@ export default function FormAccesoUnificado() {
   const [error,    setError]    = useState(null)
   const [loading,  setLoading]  = useState(false)
 
-  const telefonoValido = telefono.length === 10
+  const telefonoValido = telefono.length >= 9 && telefono.length <= 15
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -66,13 +66,13 @@ export default function FormAccesoUnificado() {
           type="tel"
           inputMode="numeric"
           placeholder="Ej: 612345678"
-          maxLength={10}
+          maxLength={15}
           value={telefono}
-          onChange={(e) => setTelefono(e.target.value.replace(/\D/g, '').slice(0, 10))}
+          onChange={(e) => setTelefono(e.target.value.replace(/\D/g, '').slice(0, 15))}
           required
         />
         {telefono && !telefonoValido && (
-          <p className="text-danger text-[11px] -mt-2">Debe tener como máximo 10 dígitos.</p>
+          <p className="text-danger text-[11px] -mt-2">Debe tener entre 9 y 15 dígitos.</p>
         )}
         <Button type="submit" variant="primary" disabled={loading || !telefonoValido}
           icon={<ArrowRight className="w-4 h-4" />}>
