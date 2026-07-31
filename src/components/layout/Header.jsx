@@ -28,10 +28,11 @@ import { activarBotonPanico } from '../../lib/api/panico.js'
  *   <header className="bg-[#1a2332] px-4 py-3 flex items-center justify-between">
  */
 export default function Header({
-  rightLabel   = null,
-  rightIcon    = null,
-  onRightClick = () => {},
-  variant      = 'default'
+  rightLabel     = null,
+  rightIcon      = null,
+  onRightClick   = () => {},
+  variant        = 'default',
+  mostrarPanico  = true
 }) {
   const rol = useAuthStore((s) => s.rol)
   const clear = useAuthStore((s) => s.clear)
@@ -78,7 +79,7 @@ export default function Header({
       {/* Bloqueo de emergencia — separado a propósito del botón derecho
           (ej. "Salir"), para que un clic apresurado sobre ese botón no
           termine activando por error el botón de pánico. */}
-      {rol === 'admin' && (
+      {mostrarPanico && rol === 'admin' && (
         <button
           onClick={() => setModalAbierto(true)}
           title="Bloqueo de emergencia"

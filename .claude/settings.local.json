@@ -9,7 +9,8 @@
       "Bash(npm run *)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(ls \"C:\\\\Users\\\\NEL224\\\\Downloads\\\\Nueva carpeta\")"
+      "Bash(ls \"C:\\\\Users\\\\NEL224\\\\Downloads\\\\Nueva carpeta\")",
+      "Bash(npx vite *)"
     ]
   }
 }

@@ -50,6 +50,11 @@ export default function FormRegistroConPin() {
     } finally { setLoading(false) }
   }
 
+  const handleCancelar = () => {
+    setPin(''); setValidado(false); setCupo(null)
+    setNombre(''); setApellido(''); setTelefono(''); setError(null)
+  }
+
   const handleRegistrar = async (e) => {
     e.preventDefault()
     setError(null); setLoading(true)
@@ -134,11 +139,16 @@ export default function FormRegistroConPin() {
           {telefono && !telefonoValido && (
             <p className="text-danger text-[11px] -mt-2">Debe tener entre 9 y 15 dígitos.</p>
           )}
-          <Button type="submit" variant="primary"
-            disabled={loading || !nombreValido || !apellidoValido || !telefonoValido}
-            icon={<ArrowRight className="w-4 h-4" />}>
-            {loading ? 'CARGANDO…' : 'REGISTRARME'}
-          </Button>
+          <div className="grid grid-cols-2 gap-3">
+            <Button type="button" variant="outline" onClick={handleCancelar} disabled={loading}>
+              CANCELAR
+            </Button>
+            <Button type="submit" variant="primary"
+              disabled={loading || !nombreValido || !apellidoValido || !telefonoValido}
+              icon={<ArrowRight className="w-4 h-4" />}>
+              {loading ? 'CARGANDO…' : 'REGISTRARME'}
+            </Button>
+          </div>
         </form>
       )}
     </Card>
