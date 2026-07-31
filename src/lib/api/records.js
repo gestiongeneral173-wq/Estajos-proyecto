@@ -480,7 +480,7 @@ export async function getPagoPorPeriodo(empleadoId, fechaFin) {
   return data?.[0] ?? null
 }
 
-/* ─── Buscador de empleados pendientes de pago (Escanear · Central) ────────
+/* ─── Buscador de empleados (Escanear · Central) ────────────────────────
  * Reemplaza el lookup uno-por-uno del campo "código manual": trae TODOS los
  * empleados y, en 4 consultas fijas (sin importar cuántos empleados haya —
  * nada de un loop por empleado), calcula quién ya está pagado en su ciclo
@@ -490,11 +490,16 @@ export async function getPagoPorPeriodo(empleadoId, fechaFin) {
  * ambos tipos de ciclo (quincenal + mensual) a la vez, porque cualquier
  * empleado de cualquier tipo puede aparecer en esta búsqueda.
  *
- * Esta lista solo decide QUIÉN SE MUESTRA. Al seleccionar a alguien, la
- * pantalla sigue llamando a `cargarTrabajador(id)` como ya hacía con el QR
- * — esa sigue siendo la única fuente de verdad para jornadas/adelantos/pago
- * reales de ese empleado, así que una lista momentáneamente desactualizada
- * nunca puede mostrar un monto a pagar incorrecto.
+ * Ya NO se excluye a los pagados de la lista — se devuelven todos con un
+ * flag `pagado`, para que el buscador los siga mostrando (remarcados) y el
+ * admin pueda seguir dándoles adelanto u otro pago sin depender del QR.
+ *
+ * Esta lista solo decide QUIÉN SE MUESTRA y con qué marca visual. Al
+ * seleccionar a alguien, la pantalla sigue llamando a `cargarTrabajador(id)`
+ * como ya hacía con el QR — esa sigue siendo la única fuente de verdad para
+ * jornadas/adelantos/pago reales de ese empleado, así que una lista
+ * momentáneamente desactualizada nunca puede mostrar un monto a pagar
+ * incorrecto.
  */
 export async function getEmpleadosPendientesDePago() {
   const periodos = {
@@ -540,11 +545,11 @@ export async function getEmpleadosPendientesDePago() {
     (pagos.data ?? []).map((r) => [r.empleado_id, soloFecha(r.fecha_cierre_ciclo)])
   )
 
-  return empleados.filter((e) => {
+  return empleados.map((e) => {
     const periodo = periodos[e.payment_period]
-    if (!periodo) return true // tipo_pago sin ciclo conocido: se muestra por seguridad
+    if (!periodo) return { ...e, pagado: false } // tipo_pago sin ciclo conocido: nunca se marca pagado
     const esPagado = finPagadoPorEmpleado.get(e.id) === periodo.fin && !conPendiente.has(e.id)
-    return !esPagado
+    return { ...e, pagado: esPagado }
   })
 }
 

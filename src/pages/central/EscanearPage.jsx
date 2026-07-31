@@ -111,10 +111,12 @@ export default function EscanearPage() {
 
   const pendientesFiltrados = useMemo(() => {
     const t = busqueda.trim().toLowerCase()
-    if (!t) return pendientes
-    return pendientes.filter((e) =>
+    const lista = !t ? pendientes : pendientes.filter((e) =>
       e.nombre?.toLowerCase().includes(t) || e.telefono?.toLowerCase().includes(t)
     )
+    // No pagados primero — los pagados siguen visibles (para adelanto u
+    // otro pago) pero no deben ensuciar el flujo normal de fichaje.
+    return [...lista].sort((a, b) => Number(a.pagado) - Number(b.pagado))
   }, [busqueda, pendientes])
 
   // ── Scanner inline ────────────────────────────────────────────────────────
@@ -260,12 +262,19 @@ export default function EscanearPage() {
                           key={e.id}
                           type="button"
                           onClick={() => cargarTrabajador(e.id)}
-                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left bg-gray-50 hover:bg-primary/10 transition-colors active:scale-97"
+                          className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-left transition-colors active:scale-97 ${
+                            e.pagado ? 'bg-green-50 hover:bg-green-100' : 'bg-gray-50 hover:bg-primary/10'
+                          }`}
                         >
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-navy-dark truncate">{e.nombre}</p>
                             <p className="text-[10px] text-gray-400">{e.telefono}</p>
                           </div>
+                          {e.pagado && (
+                            <span className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">
+                              Pagado
+                            </span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -295,7 +304,7 @@ export default function EscanearPage() {
               </div>
               {esPagado && (
                 <div className="mt-3 p-2 bg-green-100 border border-green-300 rounded-lg text-center text-green-700 font-semibold text-xs">
-                  ✅ PAGADO EN ESTE CICLO
+                  PAGADO EN ESTE CICLO
                 </div>
               )}
             </Card>
