@@ -14,6 +14,7 @@ import StatCard      from '../../components/domain/StatCard.jsx'
 import { useAuthStore } from '../../store/authStore.js'
 import { logout } from '../../lib/api/auth.js'
 import { getResumenPagos } from '../../lib/api/records.js'
+import { getResumenPagosVehiculos } from '../../lib/api/vehicles.js'
 import {
   getDatosCicloParaPago, generarListaPago, listarListasPago,
   getItemsListaPagoConJornadas
@@ -72,6 +73,10 @@ export default function ResumenPage() {
   const navigate = useNavigate()
   const { rol, clear } = useAuthStore()
   const [stats, setStats] = useState({ quincenal: 0, mensual: 0 })
+  // Contador exclusivo de furgonetas — misma regla/ciclo que `stats`
+  // (ver getResumenPagosVehiculos), pero sobre jornada_furgoneta /
+  // adelanto_furgoneta en vez de jornada_empleado / adelanto_empleado.
+  const [statsVehiculos, setStatsVehiculos] = useState({ quincenal: 0, mensual: 0 })
 
   // Cambio 1.4.1 / 1.4.2 (Séptima llamada): datos del ciclo activo,
   // compartidos entre la Lista de Pago y la Planilla imprimible.
@@ -104,6 +109,7 @@ export default function ResumenPage() {
     //[Vinculo Global] Se usa la ruta centralizada definida en constants.js ('/central/login')
     if (rol !== 'admin') { navigate( Direccion.centralLogin , { replace: true }); return }
     getResumenPagos().then(setStats).catch(console.error)
+    getResumenPagosVehiculos().then(setStatsVehiculos).catch(console.error)
   }, [rol, navigate])
 
   const cargarCiclo = useCallback(async () => {
@@ -335,6 +341,18 @@ export default function ResumenPage() {
             <div className="grid grid-cols-2 gap-3">
               <StatCard value={`€${stats.quincenal.toFixed(2)}`} label="Quincenales" color="gold" />
               <StatCard value={`€${stats.mensual.toFixed(2)}`} label="Mensuales" color="navy" />
+            </div>
+          </Card>
+
+          {/* ── Resumen Furgonetas: contador exclusivo de vehículos, misma
+              regla/ciclo que el de empleados (ver getResumenPagosVehiculos
+              en vehicles.js), en card propia para no mezclar visualmente
+              empleados con furgonetas. ── */}
+          <Card>
+            <SectionTitle color="gold">Resumen Furgonetas</SectionTitle>
+            <div className="grid grid-cols-2 gap-3">
+              <StatCard value={`€${statsVehiculos.quincenal.toFixed(2)}`} label="Quincenales" color="gold" />
+              <StatCard value={`€${statsVehiculos.mensual.toFixed(2)}`} label="Mensuales" color="navy" />
             </div>
           </Card>
 
