@@ -10,11 +10,14 @@ export default function FormTemporal({ guardando, onSubmit, onCancel }) {
   const [destajo, setDestajo] = useState('')
 
   const nombreValido = nombre.trim().length > 0
-  // Un temporal solo cobra por destajo (no tiene tarifa fija) — es su único pago.
-  const destajoValido = parseFloat(destajo) > 0
+  // Un temporal no tiene tarifa fija por hora — horas es solo registro y
+  // destajo es su pago — pero no hace falta llenar los dos: alcanza con
+  // que uno de los dos tenga algo, para cubrir el caso de alguien que solo
+  // se registra por horas (se le paga aparte) o solo por destajo.
+  const valoresValidos = (parseFloat(horas) || 0) > 0 || (parseFloat(destajo) || 0) > 0
 
   const handleSubmit = () => {
-    if (!nombreValido || !destajoValido || guardando) return
+    if (!nombreValido || !valoresValidos || guardando) return
     onSubmit({
       nombre: nombre.trim(),
       horas: parseFloat(horas) || 0,
@@ -53,7 +56,7 @@ export default function FormTemporal({ guardando, onSubmit, onCancel }) {
         <Button
           variant="primary"
           icon={<Check className="w-4 h-4" />}
-          disabled={!nombreValido || !destajoValido || guardando}
+          disabled={!nombreValido || !valoresValidos || guardando}
           onClick={handleSubmit}
         >
           {guardando ? 'PAGANDO…' : 'REGISTRAR Y PAGAR'}

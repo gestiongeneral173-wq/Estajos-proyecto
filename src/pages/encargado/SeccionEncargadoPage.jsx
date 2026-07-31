@@ -278,7 +278,9 @@ export default function SeccionEncargadoPage() {
         horas:   formData.horas,
         destajo: formData.destajo,
       })
-      setTotalPagado(formData.destajo)
+      // Si el temporal se registró solo por horas (destajo 0), no hubo pago
+      // real — el banner debe decir "Jornada registrada", no "Pagado €0.00".
+      setTotalPagado(formData.destajo > 0 ? formData.destajo : null)
       // Cambio 2.3: los temporales no vienen del servidor; se agregan a la
       // lista local para que aparezcan en el panel de registrados.
       setTemporalesSesion((prev) => [...prev, { nombre: formData.nombre, hora: new Date() }])
