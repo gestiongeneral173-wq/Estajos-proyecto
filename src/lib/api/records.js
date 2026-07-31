@@ -110,7 +110,7 @@ export async function getJornadasDelDia(fecha) {
   const { data, error } = await supabase
     .from('jornada_empleado')
     .select(`
-      id, horas:horas_trabajadas, destajo:pago_destajo, fecha:fecha_trabajo,
+      id, horas:horas_trabajadas, destajo:pago_destajo, fecha:fecha_trabajo, fue_liquidado,
       empleado:empleado_id ( id, nombre:nombre_completo ),
       vehiculo:furgoneta_id ( id, nombre:apodo, matricula ),
       encargado:encargado_id ( id, nombre:nombre_completo )
