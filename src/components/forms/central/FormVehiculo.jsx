@@ -8,6 +8,9 @@ import Button from '../../ui/Button.jsx'
  *  - onSubmit: () => void
  *  - saving: bool
  *  - error: string | null
+ *  - periodoPendiente: 'quincenal' | 'mensual' | null   (solo modo editar;
+ *      cambio de periodicidad ya guardado que se aplicará en el próximo
+ *      pago exitoso de esta furgoneta — ver promoverTipoPagoPendienteVehiculo)
  */
 export default function FormVehiculo({
   values,
@@ -15,6 +18,7 @@ export default function FormVehiculo({
   onSubmit,
   saving,
   error,
+  periodoPendiente,
 }) {
   const tarifaValida = parseFloat(values.tarifa_plaza) > 0
   const plazasValidas = values.plazas_totales !== '' && parseInt(values.plazas_totales, 10) >= 0
@@ -66,6 +70,11 @@ export default function FormVehiculo({
           <option value="quincenal">Quincenal</option>
           <option value="mensual">Mensual</option>
         </select>
+        {periodoPendiente && periodoPendiente !== values.tipo_pago && (
+          <p className="text-[11px] text-amber-600 mt-1">
+            Cambiará a {periodoPendiente === 'mensual' ? 'Mensual' : 'Quincenal'} en su próximo pago.
+          </p>
+        )}
       </div>
       <Input
         label="Propietario"

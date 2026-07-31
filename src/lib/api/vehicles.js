@@ -1,4 +1,5 @@
 import { supabase } from '../supabase.js'
+import { calcularPeriodoCiclo } from './ciclos.js'
 
 /**
  * ─── VEHÍCULOS / FURGONETAS (esquema v6.0) ─────────────────
@@ -11,8 +12,10 @@ import { supabase } from '../supabase.js'
  * los adelantos en `adelanto_furgoneta`.
  */
 
+const soloFecha = (ts) => (ts ? String(ts).slice(0, 10) : ts)
+
 const SELECT_FURGONETA =
-  'id, nombre:apodo, matricula, plazas_totales, tarifa_plaza:costo_plaza, propietario, tipo_pago, pin_furgoneta ( pin, created_at )'
+  'id, nombre:apodo, matricula, plazas_totales, tarifa_plaza:costo_plaza, propietario, tipo_pago, tipo_pago_pendiente, pin_furgoneta ( pin, created_at )'
 
 // Aplana el PIN embebido a `pin_actual` y expone `activo: true` sintético
 // (v6.0 no tiene borrado lógico).
@@ -24,6 +27,7 @@ const mapFurgoneta = (v) => v && {
   tarifa_plaza: v.tarifa_plaza,
   propietario: v.propietario,
   tipo_pago: v.tipo_pago,
+  tipo_pago_pendiente: v.tipo_pago_pendiente,
   pin_actual: v.pin_furgoneta?.pin,
   pin_actualizado_en: v.pin_furgoneta?.created_at,
   activo: true,
@@ -33,12 +37,13 @@ const mapFurgoneta = (v) => v && {
 // no se guarda aquí (vive en pin_furgoneta, autogenerado por trigger).
 function aColumnasFurgoneta(datos) {
   const out = {}
-  if ('nombre' in datos)         out.apodo          = datos.nombre
-  if ('matricula' in datos)      out.matricula      = datos.matricula?.trim() || null
-  if ('tarifa_plaza' in datos)   out.costo_plaza    = datos.tarifa_plaza
-  if ('tipo_pago' in datos)      out.tipo_pago      = datos.tipo_pago
-  if ('plazas_totales' in datos) out.plazas_totales = datos.plazas_totales
-  if ('propietario' in datos)    out.propietario    = datos.propietario?.trim() || null
+  if ('nombre' in datos)              out.apodo               = datos.nombre
+  if ('matricula' in datos)           out.matricula           = datos.matricula?.trim() || null
+  if ('tarifa_plaza' in datos)        out.costo_plaza         = datos.tarifa_plaza
+  if ('tipo_pago' in datos)           out.tipo_pago           = datos.tipo_pago
+  if ('tipo_pago_pendiente' in datos) out.tipo_pago_pendiente = datos.tipo_pago_pendiente
+  if ('plazas_totales' in datos)      out.plazas_totales      = datos.plazas_totales
+  if ('propietario' in datos)         out.propietario         = datos.propietario?.trim() || null
   return out
 }
 
@@ -56,6 +61,57 @@ export async function getVehiculoPorId(id) {
     .from('furgoneta').select(SELECT_FURGONETA).eq('id', id).single()
   if (error) throw new Error(error.message)
   return mapFurgoneta(data)
+}
+
+/* ─── Resumen de pagos pendientes — Furgonetas (Panel Central) ────────
+ * Mismo criterio y misma fuente de verdad de ciclo que getResumenPagos
+ * (records.js), pero exclusivo de furgonetas: jornada_furgoneta
+ * (plazas_ocupadas × tarifa_aplicada) y adelanto_furgoneta pendientes,
+ * agrupados por el `tipo_pago` propio de CADA furgoneta y acotados por el
+ * fin de su ciclo activo (calcularPeriodoCiclo — única fuente de verdad,
+ * compartida con empleados). Igual que en empleados, sin límite inferior a
+ * propósito: una furgoneta con arrastre de un ciclo cerrado sin pagar
+ * sigue sumando aquí hasta que se liquide.
+ */
+export async function getResumenPagosVehiculos() {
+  const periodos = {
+    quincenal: calcularPeriodoCiclo('quincenal'),
+    mensual:   calcularPeriodoCiclo('mensual'),
+  }
+  const dentroDelCiclo = (fecha, tipo) => {
+    const p = periodos[tipo]
+    if (!p || !fecha) return false
+    return soloFecha(fecha) <= p.fin
+  }
+
+  const [jornadas, adelantos] = await Promise.all([
+    supabase.from('jornada_furgoneta')
+      .select('plazas_ocupadas, tarifa_aplicada, fecha_trabajo, furgoneta:furgoneta_id(tipo_pago)')
+      .eq('fue_liquidado', false),
+    supabase.from('adelanto_furgoneta')
+      .select('monto, fecha_adelanto, furgoneta:furgoneta_id(tipo_pago)')
+      .eq('fue_liquidado', false),
+  ])
+  if (jornadas.error) throw new Error(jornadas.error.message)
+  if (adelantos.error) throw new Error(adelantos.error.message)
+
+  const resumen = { quincenal: 0, mensual: 0 }
+
+  jornadas.data?.forEach((j) => {
+    const tipo = j.furgoneta?.tipo_pago
+    if (tipo !== 'quincenal' && tipo !== 'mensual') return
+    if (!dentroDelCiclo(j.fecha_trabajo, tipo)) return
+    resumen[tipo] += Number(j.plazas_ocupadas || 0) * Number(j.tarifa_aplicada || 0)
+  })
+
+  adelantos.data?.forEach((a) => {
+    const tipo = a.furgoneta?.tipo_pago
+    if (tipo !== 'quincenal' && tipo !== 'mensual') return
+    if (!dentroDelCiclo(a.fecha_adelanto, tipo)) return
+    resumen[tipo] -= Number(a.monto || 0)
+  })
+
+  return resumen
 }
 
 // Traduce el error crudo de Postgres del CHECK(costo_plaza > 0) a un mensaje
@@ -81,6 +137,41 @@ export async function actualizarVehiculo(id, cambios) {
     .from('furgoneta').update(aColumnasFurgoneta(cambios)).eq('id', id).select(SELECT_FURGONETA).single()
   if (error) throw traducirErrorFurgoneta(error)
   return mapFurgoneta(data)
+}
+
+/**
+ * Cambio de ciclo (quincenal/mensual) diferido — mismo patrón exacto que
+ * `empleados.tipo_pago_pendiente` (ver `resolverPendientePeriodo` y
+ * `promoverTipoPagoPendiente` en workers.js). `actualizarVehiculo` NUNCA
+ * escribe `tipo_pago` directo desde el formulario de edición — solo su
+ * versión "pendiente" (calculada con `resolverPendientePeriodo`, reusada tal
+ * cual, es una función pura sin nada específico de empleados). El cambio
+ * real solo entra en vigor aquí, justo después de que el pago del ciclo
+ * activo de esta furgoneta se ejecutó con éxito — nunca antes, y nunca desde
+ * "Dar de baja" (esa RPC borra la fila entera, no hay nada que promover).
+ *
+ * Best-effort a propósito, igual que su par de empleados: en este punto el
+ * pago ya es irreversible, así que un fallo aquí no debe aparentar que el
+ * pago falló — el pendiente simplemente se reintenta en el próximo pago.
+ */
+export async function promoverTipoPagoPendienteVehiculo(furgonetaId) {
+  try {
+    const { data, error } = await supabase
+      .from('furgoneta')
+      .select('tipo_pago_pendiente')
+      .eq('id', furgonetaId)
+      .single()
+    if (error) throw error
+    if (!data.tipo_pago_pendiente) return null
+
+    return await actualizarVehiculo(furgonetaId, {
+      tipo_pago:           data.tipo_pago_pendiente,
+      tipo_pago_pendiente: null,
+    })
+  } catch (err) {
+    console.error(`No se pudo promover tipo_pago_pendiente de la furgoneta ${furgonetaId}:`, err.message)
+    return null
+  }
 }
 
 // Baja con liquidación forzada — Fase A (solo lectura, se puede repetir).

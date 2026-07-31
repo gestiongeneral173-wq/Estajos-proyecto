@@ -18,7 +18,9 @@ import {
   actualizarPlazasVehiculoDia, listarPlazasVehiculoPendientes,
   listarAdelantosVehiculoPendientes, registrarAdelantoVehiculo,
   actualizarMontoAdelantoVehiculo, eliminarAdelantoVehiculo,
+  promoverTipoPagoPendienteVehiculo,
 } from '../../lib/api/vehicles.js'
+import { resolverPendientePeriodo } from '../../lib/api/workers.js'
 import { getHistorialPagosVehiculo, ejecutarPagoVehiculo } from '../../lib/api/records.js'
 import { calcularPeriodoCiclo } from '../../lib/api/ciclos.js'
 import { useRealtime } from '../../hooks/useRealtime.js'
@@ -183,14 +185,27 @@ export default function VehiculoDetallePage() {
   const handleGuardarEdit = async () => {
     setSavingEdit(true); setEditError(null)
     try {
-      await actualizarVehiculo(id, {
+      const patch = {
         nombre: formEdit.nombre.trim(),
         matricula: formEdit.matricula?.trim() || null,
         plazas_totales: parseInt(formEdit.plazas_totales, 10) || 0,
         tarifa_plaza: parseFloat(formEdit.tarifa_plaza) || 0,
-        tipo_pago: formEdit.tipo_pago,
         propietario: formEdit.propietario?.trim() || null,
-      })
+      }
+
+      // tipo_pago ya no se escribe directo aquí: solo su versión
+      // "pendiente", que se aplica de verdad recién en el próximo pago
+      // exitoso de esta furgoneta (ver promoverTipoPagoPendienteVehiculo) —
+      // mismo patrón que ya usa TrabajadorDetallePage con payment_period.
+      const pendienteActual = vehiculo.tipo_pago_pendiente ?? null
+      const pendienteNuevo  = resolverPendientePeriodo(
+        vehiculo.tipo_pago, pendienteActual, formEdit.tipo_pago
+      )
+      if (pendienteNuevo !== pendienteActual) {
+        patch.tipo_pago_pendiente = pendienteNuevo
+      }
+
+      await actualizarVehiculo(id, patch)
       await cargar()
       setEditando(false)
     } catch (err) { setEditError(err.message) }
@@ -303,6 +318,10 @@ export default function VehiculoDetallePage() {
         periodoInicio: periodoActivo.inicio,
         periodoFin: periodoActivo.fin,
       })
+      // Justo después de un pago exitoso: si esta furgoneta tenía un cambio
+      // de periodicidad pendiente, aquí es donde entra en vigor (mismo
+      // patrón que generarListaPago hace para empleados).
+      await promoverTipoPagoPendienteVehiculo(id)
       setPagarModalOpen(false)
       await cargar()
     } catch (err) {
@@ -405,6 +424,7 @@ export default function VehiculoDetallePage() {
               onSubmit={handleGuardarEdit}
               saving={savingEdit}
               error={editError}
+              periodoPendiente={vehiculo.tipo_pago_pendiente}
             />
           </Card>
         )}
