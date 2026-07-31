@@ -310,12 +310,27 @@ export default function VehiculoDetallePage() {
     [vehiculo?.tipo_pago]
   )
 
+  // Arrastre: si esta furgoneta tiene jornadas o adelantos pendientes de
+  // ANTES del inicio oficial del ciclo activo (un ciclo anterior que se
+  // quedó sin liquidar), "PAGAR" debe cobrarlos también — mismo criterio
+  // que `periodoInicioReal` ya usa `paymentLists.js` para empleados. Sin
+  // esto, `ejecutar_pago_furgoneta` recibía siempre el inicio OFICIAL como
+  // límite inferior: cualquier jornada fechada antes quedaba fuera del
+  // rango `[inicio, fin]` que liquida la RPC, así que el pago se registraba
+  // con total €0 (nada caía dentro del rango) y la jornada arrastrada se
+  // quedaba sin marcar como liquidada — reaparecía en "Nómina Actual" y
+  // seguía sumando en el contador de furgonetas.
+  const periodoInicioReal = useMemo(() => {
+    const fechas = [...diasVehiculo.map((d) => d.fecha), ...adelantos.map((a) => a.fecha)].filter(Boolean)
+    return fechas.length ? [...fechas, periodoActivo.inicio].sort()[0] : periodoActivo.inicio
+  }, [diasVehiculo, adelantos, periodoActivo.inicio])
+
   const handlePagarVehiculo = async () => {
     setSavingPagar(true); setPagarError(null)
     try {
       await ejecutarPagoVehiculo({
         vehiculoId: id,
-        periodoInicio: periodoActivo.inicio,
+        periodoInicio: periodoInicioReal,
         periodoFin: periodoActivo.fin,
       })
       // Justo después de un pago exitoso: si esta furgoneta tenía un cambio
