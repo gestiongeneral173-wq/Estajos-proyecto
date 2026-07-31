@@ -86,6 +86,30 @@ export async function generarPinRegistro(maximoUso) {
   return r ? { pin: r.pin, cupo_total: r.maximo_uso, expires_at: r.expires_at } : null
 }
 
+/**
+ * Lista los PINs de registro todavía vigentes (no vencidos). Un PIN agotado
+ * o cancelado se borra al instante por trigger/RPC en el servidor, así que
+ * lo único que puede aparecer aquí es lo que sigue activo dentro de su
+ * ventana de 24h. Se filtra `expires_at` en el cliente porque la purga de
+ * vencidos no corre en el servidor — sin este filtro, un PIN ya caducado
+ * pero aún no borrado se listaría como si todavía sirviera.
+ */
+export async function listarPinesRegistro() {
+  const { data, error } = await supabase
+    .from('pin_registro_inicial')
+    .select('id, pin, maximo_uso, cantidad_uso, activo, created_at, expires_at')
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+  if (error) throw new Error(error.message)
+  return data ?? []
+}
+
+/** Cancela (elimina) un PIN de registro antes de que se agote su cupo. */
+export async function cancelarPinRegistro(id) {
+  const { error } = await supabase.rpc('cancelar_pin_registro', { p_id: id })
+  if (error) throw new Error(error.message)
+}
+
 /* ────────────────────────────────────────────────────────────
  *  2. ENCARGADO  (teléfono + PIN del vehículo)
  * ──────────────────────────────────────────────────────────── */
