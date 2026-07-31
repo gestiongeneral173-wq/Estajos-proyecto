@@ -189,7 +189,17 @@ export default function ReporteDiarioPage() {
                     const editing = editandoJornadaId === emp.id
                     return (
                       <div key={emp.id} className="grid grid-cols-[1fr_3rem_4rem_2rem] gap-3 items-center border-b border-gray-100 py-1.5 text-sm">
-                        <span className="text-navy-dark truncate">{emp.empleado?.nombre ?? '—'}</span>
+                        <span className="min-w-0">
+                          <span className={`truncate block ${emp.fue_liquidado ? 'text-gray-400' : 'text-navy-dark'}`}>
+                            {emp.empleado?.nombre ?? '—'}
+                          </span>
+                          {emp.fue_liquidado && (
+                            <span className="text-[9px] font-semibold text-primary uppercase block">
+                              Pagado
+                            </span>
+                          )}
+                          
+                        </span>
 
                         {editing ? (
                           <input
@@ -198,7 +208,7 @@ export default function ReporteDiarioPage() {
                             className="w-full px-1 py-0.5 bg-gray-50 border border-gray-200 rounded text-xs text-center"
                           />
                         ) : (
-                          <span className="text-right text-gray-600 text-xs">{emp.horas ?? 0}h</span>
+                          <span className={`text-right text-xs ${emp.fue_liquidado ? 'text-gray-400' : 'text-gray-600'}`}>{emp.horas ?? 0}h</span>
                         )}
 
                         {editing ? (
@@ -208,11 +218,13 @@ export default function ReporteDiarioPage() {
                             className="w-full px-1 py-0.5 bg-gray-50 border border-gray-200 rounded text-xs text-center"
                           />
                         ) : (
-                          <span className="text-right text-gray-600 text-xs border-l border-gray-300 pl-2">€{emp.destajo ?? 0}</span>
+                          <span className={`text-right text-xs border-l border-gray-300 pl-2 ${emp.fue_liquidado ? 'text-gray-400' : 'text-gray-600'}`}>€{emp.destajo ?? 0}</span>
                         )}
 
                         {emp.fue_liquidado ? (
-                          <span />
+                          <span className="flex justify-end text-primary" title="Jornada ya liquidada">
+                            <Check className="w-3.5 h-3.5" />
+                          </span>
                         ) : editing ? (
                           <div className="flex items-center justify-end -mr-1.5">
                             <button disabled={savingJornada} onClick={() => handleGuardarJornada(emp.id)} className="p-1.5 text-primary active:scale-90 transition-transform duration-160">
