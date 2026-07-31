@@ -155,7 +155,17 @@ export async function actualizarJornadaTrabajador(jornadaId, { horas, destajo, t
     .select()
   if (error) throw new Error(error.message)
   if (!data || data.length === 0) {
-    throw new Error('Esta jornada ya fue liquidada y no se puede editar.')
+    // 0 filas puede ser por dos motivos distintos: ya se liquidó, o la fila
+    // ya no existe (por ejemplo, otra pestaña la borró mientras se editaba
+    // — ver "rehacer furgoneta" en ReporteDiarioPage). Se distingue con una
+    // segunda consulta, solo en este camino de error, para no dar un
+    // mensaje incorrecto.
+    const { data: sigueExistiendo } = await supabase.from(tabla).select('id').eq('id', jornadaId)
+    throw new Error(
+      sigueExistiendo && sigueExistiendo.length > 0
+        ? 'Esta jornada ya fue liquidada y no se puede editar.'
+        : 'Esta jornada ya no existe — probablemente se eliminó desde otra pantalla. Actualiza la lista.'
+    )
   }
   return data[0]
 }
