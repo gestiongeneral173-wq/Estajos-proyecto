@@ -1,5 +1,6 @@
 import { supabase } from '../supabase.js'
 import { calcularPeriodoCiclo } from './ciclos.js'
+import { listarTrabajadores } from './workers.js'
 
 /**
  * ─── REGISTROS OPERATIVOS (esquema v6.0) ───────────────────
@@ -477,6 +478,74 @@ export async function getPagoPorPeriodo(empleadoId, fechaFin) {
     .eq('fecha_cierre_ciclo', fechaFin)
   if (error) throw new Error(error.message)
   return data?.[0] ?? null
+}
+
+/* ─── Buscador de empleados pendientes de pago (Escanear · Central) ────────
+ * Reemplaza el lookup uno-por-uno del campo "código manual": trae TODOS los
+ * empleados y, en 4 consultas fijas (sin importar cuántos empleados haya —
+ * nada de un loop por empleado), calcula quién ya está pagado en su ciclo
+ * activo. Replica exactamente la misma regla que ya usa `cargarTrabajador`
+ * en EscanearPage (pago registrado en el cierre del ciclo Y cero jornadas
+ * pendientes Y cero adelantos pendientes) — solo que en bloque, y cubriendo
+ * ambos tipos de ciclo (quincenal + mensual) a la vez, porque cualquier
+ * empleado de cualquier tipo puede aparecer en esta búsqueda.
+ *
+ * Esta lista solo decide QUIÉN SE MUESTRA. Al seleccionar a alguien, la
+ * pantalla sigue llamando a `cargarTrabajador(id)` como ya hacía con el QR
+ * — esa sigue siendo la única fuente de verdad para jornadas/adelantos/pago
+ * reales de ese empleado, así que una lista momentáneamente desactualizada
+ * nunca puede mostrar un monto a pagar incorrecto.
+ */
+export async function getEmpleadosPendientesDePago() {
+  const periodos = {
+    quincenal: calcularPeriodoCiclo('quincenal'),
+    mensual:   calcularPeriodoCiclo('mensual'),
+  }
+
+  const [empleados, jornEmp, jornEnc, adelantos, pagos] = await Promise.all([
+    listarTrabajadores({ periodo: 'todos' }),
+    supabase.from('jornada_empleado')
+      .select('empleado_id')
+      .eq('fue_liquidado', false),
+    supabase.from('jornada_encargado')
+      .select('encargado_id')
+      .eq('fue_liquidado', false)
+      .not('fecha_trabajo', 'is', null),
+    supabase.from('adelanto_empleado')
+      .select('empleado_id')
+      .eq('fue_liquidado', false),
+    supabase.from('pago_empleado')
+      .select('empleado_id, fecha_cierre_ciclo')
+      .in('fecha_cierre_ciclo', [periodos.quincenal.fin, periodos.mensual.fin]),
+  ])
+  if (jornEmp.error) throw new Error(jornEmp.error.message)
+  if (jornEnc.error) throw new Error(jornEnc.error.message)
+  if (adelantos.error) throw new Error(adelantos.error.message)
+  if (pagos.error) throw new Error(pagos.error.message)
+
+  // Cualquier jornada u adelanto sin liquidar (sin límite inferior — mismo
+  // criterio de arrastre que ya usa cargarTrabajador) tumba el "ya pagado",
+  // sin importar si además existe un pago con la fecha de cierre correcta.
+  const conPendiente = new Set([
+    ...(jornEmp.data ?? []).map((r) => r.empleado_id),
+    ...(jornEnc.data ?? []).map((r) => r.encargado_id),
+    ...(adelantos.data ?? []).map((r) => r.empleado_id),
+  ])
+
+  // empleado_id → fecha_cierre_ciclo pagada. Solo cuenta si coincide con el
+  // fin del ciclo activo del tipo_pago de ESE empleado (mismo requisito que
+  // getPagoPorPeriodo — evita que un pago de un ciclo distinto, con cierre
+  // coincidente por casualidad, marque "pagado" el ciclo equivocado).
+  const finPagadoPorEmpleado = new Map(
+    (pagos.data ?? []).map((r) => [r.empleado_id, soloFecha(r.fecha_cierre_ciclo)])
+  )
+
+  return empleados.filter((e) => {
+    const periodo = periodos[e.payment_period]
+    if (!periodo) return true // tipo_pago sin ciclo conocido: se muestra por seguridad
+    const esPagado = finPagadoPorEmpleado.get(e.id) === periodo.fin && !conPendiente.has(e.id)
+    return !esPagado
+  })
 }
 
 export async function getHistorialPagosVehiculo(vehiculoId, retentionDays = 60) {

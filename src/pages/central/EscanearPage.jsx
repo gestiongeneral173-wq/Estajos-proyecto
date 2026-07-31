@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, ScanLine, UserCircle, X, Wallet, ArrowLeft } from 'lucide-react'
+import { LogOut, ScanLine, UserCircle, X, Wallet, ArrowLeft, Search } from 'lucide-react'
 
 import Header        from '../../components/layout/Header.jsx'
 import HorizontalNav from '../../components/layout/HorizontalNav.jsx'
@@ -16,7 +16,8 @@ import { logout }       from '../../lib/api/auth.js'
 import { getTrabajadorPorId, promoverTipoPagoPendiente } from '../../lib/api/workers.js'
 import {
   registrarAdelanto, getJornadasTrabajadorPorPeriodo,
-  getPagoPorPeriodo, getAdelantosPendientes, ejecutarPago
+  getPagoPorPeriodo, getAdelantosPendientes, ejecutarPago,
+  getEmpleadosPendientesDePago,
 } from '../../lib/api/records.js'
 import { calcularPeriodoCiclo } from '../../lib/api/ciclos.js'
 import { PAYMENT_PERIOD_LABELS, Direccion } from '../../utils/constants.js'
@@ -38,7 +39,14 @@ export default function EscanearPage() {
   const [trabajador, setTrabajador] = useState(null)
   const [vista,      setVista]      = useState('menu')   // 'menu' | 'adelanto' | 'pagar'
   const [error,      setError]      = useState(null)
-  const [idManual,   setIdManual]   = useState('')
+
+  // Buscador por nombre/teléfono — reemplaza el campo de código manual.
+  // Solo muestra empleados con algo pendiente en su ciclo activo (ver
+  // getEmpleadosPendientesDePago); el QR sigue funcionando igual que antes
+  // para llegar a alguien ya pagado (p. ej. para darle un adelanto).
+  const [busqueda,          setBusqueda]          = useState('')
+  const [pendientes,        setPendientes]        = useState([])
+  const [cargandoPendientes, setCargandoPendientes] = useState(false)
 
   const [jornadas,  setJornadas]  = useState([])
   const [adelantos, setAdelantos] = useState([])
@@ -87,6 +95,27 @@ export default function EscanearPage() {
       setEscaneando(false)
     }
   }, [])
+
+  const cargarPendientes = useCallback(async () => {
+    setCargandoPendientes(true)
+    try {
+      setPendientes(await getEmpleadosPendientesDePago())
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setCargandoPendientes(false)
+    }
+  }, [])
+
+  useEffect(() => { cargarPendientes() }, [cargarPendientes])
+
+  const pendientesFiltrados = useMemo(() => {
+    const t = busqueda.trim().toLowerCase()
+    if (!t) return pendientes
+    return pendientes.filter((e) =>
+      e.nombre?.toLowerCase().includes(t) || e.telefono?.toLowerCase().includes(t)
+    )
+  }, [busqueda, pendientes])
 
   // ── Scanner inline ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -141,7 +170,10 @@ export default function EscanearPage() {
   }, [escaneando, cargarTrabajador])
 
   const handleSalir = async () => { await logout(); clear(); navigate(Direccion.login) }
-  const volverAEscanear = () => { setTrabajador(null); setError(null); setVista('menu') }
+  const volverAEscanear = () => {
+    setTrabajador(null); setError(null); setVista('menu'); setBusqueda('')
+    cargarPendientes()
+  }
 
   const periodo = trabajador ? calcularPeriodoCiclo(trabajador.payment_period) : null
   const totalDias = jornadas.reduce((s, j) => s + (j.horas * (trabajador?.tarifa_hora || 0) + Number(j.destajo)), 0)
@@ -204,21 +236,40 @@ export default function EscanearPage() {
                   ESCANEAR QR
                 </Button>
                 <div className="mt-4 pt-4 border-t border-gray-100">
-                  <p className="text-gray-400 text-[10px] uppercase text-center mb-2">o código manual</p>
-                  <div className="flex gap-2">
+                  <p className="text-gray-400 text-[10px] uppercase text-center mb-2">
+                    o busca por nombre / teléfono
+                  </p>
+                  <div className="relative mb-3">
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
-                      value={idManual}
-                      onChange={(e) => setIdManual(e.target.value)}
-                      placeholder="Código del trabajador"
-                      className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                      value={busqueda}
+                      onChange={(e) => setBusqueda(e.target.value)}
+                      placeholder="Nombre o teléfono del trabajador"
+                      className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-primary"
                     />
-                    <button
-                      onClick={() => idManual && cargarTrabajador(idManual)}
-                      className="px-4 py-2 bg-navy-dark text-white rounded-lg text-xs font-semibold"
-                    >
-                      OK
-                    </button>
                   </div>
+
+                  {cargandoPendientes ? (
+                    <p className="text-gray-400 text-xs text-center py-4">Cargando empleados…</p>
+                  ) : pendientesFiltrados.length === 0 ? (
+                    <p className="text-gray-400 text-xs text-center py-4">Sin coincidencias.</p>
+                  ) : (
+                    <div className="space-y-1 max-h-72 overflow-y-auto">
+                      {pendientesFiltrados.map((e) => (
+                        <button
+                          key={e.id}
+                          type="button"
+                          onClick={() => cargarTrabajador(e.id)}
+                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left bg-gray-50 hover:bg-primary/10 transition-colors active:scale-97"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-navy-dark truncate">{e.nombre}</p>
+                            <p className="text-[10px] text-gray-400">{e.telefono}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             )}
