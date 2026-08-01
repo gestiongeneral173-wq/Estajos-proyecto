@@ -23,6 +23,7 @@ import {
   getConfiguracionTemporal, actualizarTarifaTemporal,
   listarTemporales, eliminarTemporal, eliminarTodosLosTemporales,
 } from '../../lib/api/temporales.js'
+import { getConfiguracionChofer, actualizarTarifaChofer } from '../../lib/api/choferes.js'
 
 // IMPORTACIÓN IMPORTANTE: Direccion de constants.js : Para el uso de direcciones
 import { Direccion } from '../../utils/constants.js'
@@ -52,6 +53,7 @@ export default function TrabajadoresPage() {
   const [modalOpen, setModalOpen]       = useState(false)
   const [modalPin, setModalPin]         = useState(false)
   const [modalTemporales, setModalTemporales] = useState(false)
+  const [modalChofer, setModalChofer]   = useState(false)
 
   useEffect(() => {
     // [Vinculo Global] Se usa la ruta centralizada definida en constants.js ('/central/login')
@@ -101,6 +103,10 @@ export default function TrabajadoresPage() {
           <Button variant="dark" icon={<Settings className="w-4 h-4" />}
             className="mt-2" onClick={() => setModalTemporales(true)}>
             CONFIGURAR TEMPORALES
+          </Button>
+          <Button variant="dark" icon={<Settings className="w-4 h-4" />}
+            className="mt-2" onClick={() => setModalChofer(true)}>
+            CONFIGURAR CHOFER
           </Button>
         </Card>
 
@@ -154,6 +160,8 @@ export default function TrabajadoresPage() {
       <ModalPinRegistro open={modalPin} onClose={() => setModalPin(false)} />
 
       <ModalConfiguracionTemporal open={modalTemporales} onClose={() => setModalTemporales(false)} />
+
+      <ModalConfiguracionChofer open={modalChofer} onClose={() => setModalChofer(false)} />
     </div>
   )
 }
@@ -586,6 +594,89 @@ function ModalConfiguracionTemporal({ open, onClose }) {
         </div>
       </Modal>
     </>
+  )
+}
+
+/* ─── Modal configuración de chofer ───
+   Solo la tarifa por hora (fila única, mismo patrón que
+   ModalConfiguracionTemporal) — la lista operativa de choferes pendientes
+   de pago vive en ResumenPage, no aquí. */
+function ModalConfiguracionChofer({ open, onClose }) {
+  const [tarifa, setTarifa]                 = useState('')
+  const [cargandoTarifa, setCargandoTarifa] = useState(false)
+  const [editandoTarifa, setEditandoTarifa] = useState(false)
+  const [savingTarifa, setSavingTarifa]     = useState(false)
+  const [tarifaError, setTarifaError]       = useState(null)
+  const [tarifaGuardada, setTarifaGuardada] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setCargandoTarifa(true); setTarifaError(null)
+    getConfiguracionChofer()
+      .then((c) => setTarifa(c ? String(c.tarifa_hora_chofer) : ''))
+      .catch((err) => setTarifaError(err.message))
+      .finally(() => setCargandoTarifa(false))
+  }, [open])
+
+  const tarifaValida = parseFloat(tarifa) >= 0
+
+  const handleGuardarTarifa = async () => {
+    setTarifaError(null); setSavingTarifa(true)
+    try {
+      await actualizarTarifaChofer(parseFloat(tarifa))
+      setEditandoTarifa(false)
+      setTarifaGuardada(true)
+      setTimeout(() => setTarifaGuardada(false), 1500)
+    } catch (err) { setTarifaError(err.message) } finally { setSavingTarifa(false) }
+  }
+
+  return (
+    <Modal open={open} title="Configurar chofer" onClose={() => { setEditandoTarifa(false); onClose() }}>
+      <div className="bg-gray-50 rounded-xl p-3">
+        {tarifaError && <p className="text-danger text-[10px] mb-2">{tarifaError}</p>}
+        {tarifaGuardada && <p className="text-primary text-[10px] mb-2">Tarifa actualizada.</p>}
+        {cargandoTarifa ? (
+          <p className="text-gray-400 text-xs">Cargando tarifa de chofer…</p>
+        ) : editandoTarifa ? (
+          <div className="space-y-2">
+            <Input
+              label="Tarifa por hora de chofer (€)"
+              type="number"
+              min="0"
+              step="0.01"
+              value={tarifa}
+              onChange={(e) => setTarifa(e.target.value)}
+            />
+            {tarifa !== '' && !tarifaValida && (
+              <p className="text-danger text-[10px]">No puede ser negativa.</p>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={() => setEditandoTarifa(false)} disabled={savingTarifa}>
+                CANCELAR
+              </Button>
+              <Button variant="primary" onClick={handleGuardarTarifa} disabled={savingTarifa || !tarifaValida}>
+                {savingTarifa ? 'GUARDANDO…' : 'GUARDAR'}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[9px] text-gray-400 uppercase">Tarifa de chofer</p>
+              <p className="text-sm font-bold text-navy-dark">€{Number(tarifa || 0).toFixed(2)}/h</p>
+            </div>
+            <button onClick={() => setEditandoTarifa(true)} className="text-gray-400 hover:text-navy-dark">
+              <Settings className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+      </div>
+      <p className="mt-3 text-[10px] text-gray-400 text-center">
+        Esta tarifa se copia a cada chofer del día al asignarlo — cambiarla no afecta
+        a los ya registrados. El pago del chofer es informativo (Resumen · Choferes),
+        el cliente entrega esa diferencia por fuera del sistema.
+      </p>
+    </Modal>
   )
 }
 

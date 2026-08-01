@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, FileSpreadsheet, Printer, Search, Download, Plus, X } from 'lucide-react'
+import { LogOut, FileSpreadsheet, Printer, Search, Download, Plus, X, Trash2 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
 import Header        from '../../components/layout/Header.jsx'
@@ -10,6 +10,7 @@ import Button        from '../../components/ui/Button.jsx'
 import Input         from '../../components/ui/Input.jsx'
 import SectionTitle  from '../../components/ui/SectionTitle.jsx'
 import StatCard      from '../../components/domain/StatCard.jsx'
+import Modal         from '../../components/ui/Modal.jsx'
 
 import { useAuthStore } from '../../store/authStore.js'
 import { logout } from '../../lib/api/auth.js'
@@ -17,8 +18,11 @@ import { getResumenPagos } from '../../lib/api/records.js'
 import { getResumenPagosVehiculos } from '../../lib/api/vehicles.js'
 import {
   getDatosCicloParaPago, generarListaPago, listarListasPago,
-  getItemsListaPagoConJornadas
+  getItemsListaPagoConJornadas, cancelarListaPago
 } from '../../lib/api/paymentLists.js'
+import {
+  listarChoferesPendientesDePago, calcularPagoChofer, pagarChofer,
+} from '../../lib/api/choferes.js'
 
 //IMPORTACIÓN IMPORTANTE:  Direccion de constants.js : Para el uso de direcciones
 import { Direccion } from '../../utils/constants.js'
@@ -104,6 +108,59 @@ export default function ResumenPage() {
   // `print:block`, imprimir una lista siempre sacaba la planilla entera.
   // Ahora cada botón marca qué bloque imprimir antes de llamar a print().
   const [listaAImprimir, setListaAImprimir] = useState(null)
+
+  // Cancelar lista: revierte el pago (jornadas/adelantos vuelven a
+  // fue_liquidado=false, se borra el pago) vía RPC `cancelar_lista_pago` y
+  // borra la lista. Mismo patrón de confirmación que el resto de la app
+  // (Modal + botón danger, nunca confirm() nativo).
+  const [listaACancelar, setListaACancelar] = useState(null)
+  const [cancelandoLista, setCancelandoLista] = useState(false)
+  const [cancelarListaError, setCancelarListaError] = useState(null)
+
+  // ── Choferes: pago puramente informativo, sin ciclos ni jornadas — nunca
+  // toca stats/datos/listas de arriba. "Pagar" recalcula en el momento
+  // (evita pagar de más si cambió entre que se mostró la pantalla y se
+  // confirmó) y BORRA el registro al confirmar; no queda historial, decisión
+  // explícita del cliente.
+  const [choferes, setChoferes]           = useState([])
+  const [cargandoChoferes, setCargandoChoferes] = useState(true)
+  const [choferAPagar, setChoferAPagar]   = useState(null) // { empleado_id, nombre, veces, total }
+  const [pagandoChofer, setPagandoChofer] = useState(false)
+  const [pagoChoferError, setPagoChoferError] = useState(null)
+
+  const cargarChoferes = useCallback(() => {
+    setCargandoChoferes(true)
+    return listarChoferesPendientesDePago()
+      .then(setChoferes)
+      .catch(console.error)
+      .finally(() => setCargandoChoferes(false))
+  }, [])
+
+  useEffect(() => { cargarChoferes() }, [cargarChoferes])
+
+  const handleAbrirPagoChofer = async (c) => {
+    setPagoChoferError(null)
+    try {
+      const fresco = await calcularPagoChofer(c.empleado_id)
+      setChoferAPagar({ empleado_id: c.empleado_id, nombre: c.nombre, ...fresco })
+    } catch (err) {
+      setPagoChoferError(err.message)
+    }
+  }
+
+  const handleConfirmarPagoChofer = async () => {
+    if (!choferAPagar) return
+    setPagandoChofer(true); setPagoChoferError(null)
+    try {
+      await pagarChofer({ empleadoId: choferAPagar.empleado_id, totalEsperado: choferAPagar.total })
+      setChoferAPagar(null)
+      await cargarChoferes()
+    } catch (err) {
+      setPagoChoferError(err.message)
+    } finally {
+      setPagandoChofer(false)
+    }
+  }
 
   useEffect(() => {
     //[Vinculo Global] Se usa la ruta centralizada definida en constants.js ('/central/login')
@@ -250,6 +307,33 @@ export default function ResumenPage() {
     setTimeout(() => window.print(), 0)
   }
 
+  const handleAbrirCancelarLista = (lista) => {
+    setCancelarListaError(null)
+    setListaACancelar(lista)
+  }
+
+  const handleConfirmarCancelarLista = async () => {
+    if (!listaACancelar) return
+    setCancelandoLista(true); setCancelarListaError(null)
+    try {
+      await cancelarListaPago(listaACancelar.id)
+      setItemsPorLista((prev) => {
+        const next = { ...prev }
+        delete next[listaACancelar.id]
+        return next
+      })
+      if (listaAbierta === listaACancelar.id) setListaAbierta(null)
+      setListaACancelar(null)
+      // Mismo trío que tras generar una lista: el dinero reaparece en
+      // "Resumen General" y los empleados vuelven al selector.
+      await Promise.all([cargarListas(), cargarCiclo(), getResumenPagos().then(setStats)])
+    } catch (err) {
+      setCancelarListaError(err.message)
+    } finally {
+      setCancelandoLista(false)
+    }
+  }
+
   /**
    * Cambio 1.4.3 (Octava llamada) / RF-018: exportación real a Excel del
    * ciclo activo, botón ubicado junto al selector Quincenal/Mensual.
@@ -354,6 +438,38 @@ export default function ResumenPage() {
               <StatCard value={`€${statsVehiculos.quincenal.toFixed(2)}`} label="Quincenales" color="gold" />
               <StatCard value={`€${statsVehiculos.mensual.toFixed(2)}`} label="Mensuales" color="navy" />
             </div>
+          </Card>
+
+          {/* ── Choferes: pago informativo, fuera de ciclos. El cliente
+              entrega esa diferencia por fuera del sistema — esta card
+              nunca toca stats/datos/listas ni el formato de las de abajo.
+              "Pagar" borra el registro al confirmar, no queda historial. ── */}
+          <Card>
+            <SectionTitle color="gold">Choferes</SectionTitle>
+            {pagoChoferError && (
+              <p className="text-danger text-xs text-center mb-2">{pagoChoferError}</p>
+            )}
+            {cargandoChoferes ? (
+              <p className="text-gray-400 text-xs text-center py-4">Cargando…</p>
+            ) : choferes.length === 0 ? (
+              <p className="text-gray-400 text-xs text-center py-4">Sin pagos de chofer pendientes.</p>
+            ) : (
+              <div className="space-y-2">
+                {choferes.map((c) => (
+                  <div key={c.empleado_id} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-xl">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-navy-dark truncate">{c.nombre}</p>
+                      <p className="text-[10px] text-gray-400">
+                        {c.veces} {c.veces === 1 ? 'vez' : 'veces'} como chofer · €{Number(c.total).toFixed(2)}
+                      </p>
+                    </div>
+                    <Button variant="pill" active onClick={() => handleAbrirPagoChofer(c)}>
+                      PAGAR
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
           </Card>
 
           {/* ── Cambio 1.4.1 / 1.4.2: selector de ciclo activo ── */}
@@ -539,11 +655,18 @@ export default function ResumenPage() {
                           ))}
 
                           {/* Cambio Décima: IMPRIMIR siempre disponible (permite
-                              reimprimir un documento ya cerrado, cuantas veces haga falta). */}
-                          <div className="pt-2">
+                              reimprimir un documento ya cerrado, cuantas veces haga falta).
+                              CANCELAR revierte el pago — jornadas/adelantos vuelven a
+                              pendientes y la lista desaparece del historial. */}
+                          <div className="pt-2 grid grid-cols-2 gap-2">
                             <Button variant="outline" icon={<Printer className="w-4 h-4" />}
                               onClick={() => handleImprimirLista(l.id)}>
                               IMPRIMIR
+                            </Button>
+                            <Button variant="outline" icon={<Trash2 className="w-4 h-4" />}
+                              className="!border-danger !text-danger hover:!bg-danger hover:!text-white"
+                              onClick={() => handleAbrirCancelarLista(l)}>
+                              CANCELAR
                             </Button>
                           </div>
                         </div>
@@ -556,6 +679,74 @@ export default function ResumenPage() {
           )}
         </div>
       </div>
+
+      {/* ── Confirmar pago de chofer: recalculado justo antes de mostrar
+          (handleAbrirPagoChofer), y vuelto a comparar del lado del
+          servidor al confirmar — evita pagar de más si cambió entretanto.
+          Borra el/los registro(s) al confirmar, no genera historial. ── */}
+      <Modal
+        open={!!choferAPagar}
+        title="Pagar chofer"
+        onClose={() => { if (!pagandoChofer) setChoferAPagar(null) }}
+      >
+        {choferAPagar && (
+          <>
+            <p className="text-sm text-navy-dark mb-2">
+              Vas a pagarle a <strong>{choferAPagar.nombre}</strong> por{' '}
+              <strong>{choferAPagar.veces}</strong> {choferAPagar.veces === 1 ? 'vez' : 'veces'} como chofer.
+            </p>
+            <p className="text-lg font-bold text-primary mb-4">€{choferAPagar.total.toFixed(2)}</p>
+            <p className="text-xs text-gray-500 mb-4">
+              Esto es informativo — el sistema no ejecuta ningún pago, solo borra este registro.
+              Esta acción no se puede deshacer.
+            </p>
+            {pagoChoferError && <p className="text-danger text-xs mb-3">{pagoChoferError}</p>}
+            <div className="grid grid-cols-2 gap-3">
+              <Button variant="outline" onClick={() => setChoferAPagar(null)} disabled={pagandoChofer}>
+                CANCELAR
+              </Button>
+              <Button variant="primary" onClick={handleConfirmarPagoChofer} disabled={pagandoChofer}>
+                {pagandoChofer ? 'PAGANDO…' : 'PAGAR'}
+              </Button>
+            </div>
+          </>
+        )}
+      </Modal>
+
+      {/* ── Cancelar lista de pago: revierte jornadas/adelantos a
+          fue_liquidado=false y borra el pago (RPC cancelar_lista_pago),
+          luego borra la lista. Mismo patrón de confirmación que "Eliminar
+          adelanto" / "Cancelar PIN" en el resto de la app. ── */}
+      <Modal
+        open={!!listaACancelar}
+        title="Cancelar lista de pago"
+        onClose={() => { if (!cancelandoLista) setListaACancelar(null) }}
+      >
+        {listaACancelar && (
+          <>
+            <p className="text-sm text-navy-dark mb-2">
+              Vas a cancelar la lista del <strong>{fmtCorta(listaACancelar.periodo_inicio)}</strong> al{' '}
+              <strong>{fmtCorta(listaACancelar.periodo_fin)}</strong> por{' '}
+              <strong>€{Number(listaACancelar.total_monto).toFixed(2)}</strong>.
+            </p>
+            <p className="text-xs text-gray-500 mb-4">
+              Se borran los pagos de esta lista y las jornadas/adelantos vuelven a quedar
+              pendientes — el sistema los recalcula solo en el ciclo activo. Esta acción no se
+              puede deshacer.
+            </p>
+            {cancelarListaError && <p className="text-danger text-xs mb-3">{cancelarListaError}</p>}
+            <div className="grid grid-cols-2 gap-3">
+              <Button variant="outline" onClick={() => setListaACancelar(null)} disabled={cancelandoLista}>
+                VOLVER
+              </Button>
+              <Button variant="outline" className="!border-danger !text-danger hover:!bg-danger hover:!text-white"
+                onClick={handleConfirmarCancelarLista} disabled={cancelandoLista}>
+                {cancelandoLista ? 'CANCELANDO…' : 'SÍ, CANCELAR'}
+              </Button>
+            </div>
+          </>
+        )}
+      </Modal>
 
       {/* ── Cambio 1.4.2: planilla de horas — oculta en pantalla, visible
           solo al imprimir "EXPORTAR PLANILLA". Formato según

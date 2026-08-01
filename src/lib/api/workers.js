@@ -180,21 +180,31 @@ export function resolverPendientePeriodo(actual, pendiente, elegido) {
  * debe aparentar que el pago falló ni cortar el resto de un lote de pagos
  * (generarListaPago no es atómico entre items). Si falla, el pendiente
  * simplemente se queda esperando y se reintenta solo en el próximo pago.
+ *
+ * Devuelve el `payment_period` ANTERIOR a la promoción (o null si no había
+ * nada pendiente que promover) — `generarListaPago` lo guarda en
+ * `lista_pago_detalle.tipo_pago_anterior` para que `cancelar_lista_pago`
+ * (RPC) pueda reconstruir el estado exacto si esta lista se cancela: sin
+ * este dato, cancelar una lista revierte el dinero pero deja al empleado
+ * atrapado en el ciclo nuevo para siempre, con el cambio de periodicidad ya
+ * "gastado" aunque el pago que lo disparó se haya deshecho.
  */
 export async function promoverTipoPagoPendiente(empleadoId) {
   try {
     const { data, error } = await supabase
       .from('empleados')
-      .select('payment_period_pendiente:tipo_pago_pendiente')
+      .select('payment_period:tipo_pago, payment_period_pendiente:tipo_pago_pendiente')
       .eq('id', empleadoId)
       .single()
     if (error) throw error
     if (!data.payment_period_pendiente) return null
 
-    return await actualizarTrabajador(empleadoId, {
+    const anterior = data.payment_period
+    await actualizarTrabajador(empleadoId, {
       payment_period:            data.payment_period_pendiente,
       payment_period_pendiente:  null,
     })
+    return anterior
   } catch (err) {
     console.error(`No se pudo promover tipo_pago_pendiente de ${empleadoId}:`, err.message)
     return null

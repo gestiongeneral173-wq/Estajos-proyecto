@@ -20,6 +20,7 @@ import {
   buscarJornadasFurgonetaDia, buscarTemporalesFurgonetaDia,
   misFurgonetasHoy,
 } from '../../lib/api/records.js'
+import { cerrarHorasChofer } from '../../lib/api/choferes.js'
 
 import { Direccion } from '../../utils/constants.js'
 
@@ -99,6 +100,10 @@ export default function SeccionEncargadoPage() {
   const [misFurgonetas, setMisFurgonetas] = useState([])
   // Calendario propio de "Mis horas" — separado del buscador.
   const [fechaMisHoras, setFechaMisHoras] = useState(hoy)
+  // Horas del chofer — obligatorio cuando el cupo de la furgoneta activa ya
+  // se completó y el chofer del día todavía no cerró sus horas (ver
+  // furgonetaActiva.chofer_pendiente, de misFurgonetasHoy).
+  const [horasChofer, setHorasChofer] = useState('')
   // Reemplaza al booleano selfRegistrado — ahora trae la jornada completa
   // (o vacía) para decidir entre crear / corregir / ver.
   const [estadoPropio, setEstadoPropio] = useState({
@@ -297,6 +302,27 @@ export default function SeccionEncargadoPage() {
     } finally { setGuardando(false) }
   }
 
+  // Cierra las horas del chofer de la furgoneta activa — sin destajo, no
+  // afecta ningún ciclo de pago (ver src/lib/api/choferes.js).
+  const handleGuardarHorasChofer = async () => {
+    const horas = parseFloat(horasChofer)
+    if (Number.isNaN(horas) || horas < 0) {
+      setError('Ingresa un número de horas válido (≥ 0).')
+      return
+    }
+    setError(null); setGuardando(true)
+    try {
+      await cerrarHorasChofer({ tokenTurno, horas })
+      setHorasChofer('')
+      mostrarExito()
+      cargarMisFurgonetas()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setGuardando(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-app-bg">
       <Header
@@ -444,10 +470,36 @@ export default function SeccionEncargadoPage() {
                   : ''} — turno cerrado
               </p>
             </div>
-            <p className="mt-2 text-xs text-amber-700">
-              Ya no se pueden registrar más empleados ni temporales en esta furgoneta.
-              Si tenés otra furgoneta hoy, entrá con "Entrar a otra furgoneta".
-            </p>
+
+            {furgonetaActiva?.chofer_pendiente ? (
+              <>
+                <p className="mt-2 text-xs text-amber-700">
+                  Falta registrar las horas del chofer para terminar la jornada de esta furgoneta.
+                </p>
+                <div className="mt-3 pt-3 border-t border-amber-200">
+                  <Input
+                    label="Horas del chofer"
+                    type="number"
+                    placeholder="8"
+                    value={horasChofer}
+                    onChange={(e) => setHorasChofer(e.target.value)}
+                  />
+                  <Button
+                    variant="dark"
+                    className="mt-3"
+                    disabled={!horasChofer || guardando}
+                    onClick={handleGuardarHorasChofer}
+                  >
+                    {guardando ? 'GUARDANDO…' : 'TERMINAR JORNADA DEL CHOFER'}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-amber-700">
+                Ya no se pueden registrar más empleados ni temporales en esta furgoneta.
+                Si tenés otra furgoneta hoy, entrá con "Entrar a otra furgoneta".
+              </p>
+            )}
           </Card>
         ) : (
           /* ── Búsqueda de jornada — calendario + buscador, plegable ──
