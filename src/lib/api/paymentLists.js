@@ -113,8 +113,12 @@ export async function generarListaPago({ ciclo, periodo, items, encargado }) {
     })
     // Justo después de un pago exitoso: si este empleado tenía un cambio de
     // periodicidad pendiente, aquí es donde entra en vigor (ver 2.1).
-    await promoverTipoPagoPendiente(i.empleadoId)
-    liquidados.push({ ...i, totalPagar: pago.total_pagado })
+    // `tipoPagoAnterior` (null si no había nada que promover) se guarda en
+    // el detalle de la lista — es lo único que le permite a
+    // `cancelar_lista_pago` restaurar el ciclo viejo si esta lista se
+    // cancela más tarde (ver promoverTipoPagoPendiente en workers.js).
+    const tipoPagoAnterior = await promoverTipoPagoPendiente(i.empleadoId)
+    liquidados.push({ ...i, totalPagar: pago.total_pagado, tipoPagoAnterior })
   }
 
   const totalMonto = liquidados.reduce((s, i) => s + i.totalPagar, 0)
@@ -150,6 +154,7 @@ export async function generarListaPago({ ciclo, periodo, items, encargado }) {
       total_devengado: i.totalDevengado,
       total_adelantos: i.totalAdelantos,
       monto_incluido: i.totalPagar,
+      tipo_pago_anterior: i.tipoPagoAnterior,
     })))
   if (errItems) throw new Error(errItems.message)
 
@@ -182,6 +187,19 @@ export async function getItemsListaPago(listaId) {
 // `lista.periodo_inicio` ya viene ensanchado al arrastre real de cada
 // item (ver generarListaPago), así que este rango cubre exactamente lo
 // que se pagó, sin dejar días fuera.
+// Revierte una lista ya pagada: RPC `cancelar_lista_pago` (atómica en el
+// servidor, simétrica a ejecutar_pago_empleado). Por cada empleado de la
+// lista reabre exactamente el rango de SU pago_empleado (fue_liquidado
+// vuelve a false en jornadas/adelantos) y borra ese pago; también restaura
+// `tipo_pago`/`tipo_pago_pendiente` si esta lista había disparado una
+// promoción de ciclo (ver tipo_pago_anterior en generarListaPago). Al final
+// borra lista_pago_detalle + lista_pago_quincenal. El caller debe recargar
+// listas/ciclo/stats después (mismo trío que tras generar una lista).
+export async function cancelarListaPago(listaId) {
+  const { error } = await supabase.rpc('cancelar_lista_pago', { p_lista_id: listaId })
+  if (error) throw new Error(error.message)
+}
+
 export async function getItemsListaPagoConJornadas(listaId) {
   const { data: lista, error: errLista } = await supabase
     .from('lista_pago_quincenal').select('periodo_inicio, periodo_fin').eq('id', listaId).single()

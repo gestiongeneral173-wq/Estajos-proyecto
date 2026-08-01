@@ -20,6 +20,7 @@ import {
   buscarJornadasFurgonetaDia, buscarTemporalesFurgonetaDia,
   misFurgonetasHoy,
 } from '../../lib/api/records.js'
+import { cerrarHorasChofer } from '../../lib/api/choferes.js'
 
 import { Direccion } from '../../utils/constants.js'
 
@@ -99,6 +100,10 @@ export default function SeccionEncargadoPage() {
   const [misFurgonetas, setMisFurgonetas] = useState([])
   // Calendario propio de "Mis horas" — separado del buscador.
   const [fechaMisHoras, setFechaMisHoras] = useState(hoy)
+  // Horas del chofer — obligatorio cuando el cupo de la furgoneta activa ya
+  // se completó y el chofer del día todavía no cerró sus horas (ver
+  // furgonetaActiva.chofer_pendiente, de misFurgonetasHoy).
+  const [horasChofer, setHorasChofer] = useState('')
   // Reemplaza al booleano selfRegistrado — ahora trae la jornada completa
   // (o vacía) para decidir entre crear / corregir / ver.
   const [estadoPropio, setEstadoPropio] = useState({
@@ -188,6 +193,15 @@ export default function SeccionEncargadoPage() {
   // haya cargado, se asume abierta (no bloquear de más antes de tener dato).
   const furgonetaActiva = misFurgonetas.find((f) => f.furgoneta_id === vehiculoActivoId)
   const furgonetaActivaCerrada = furgonetaActiva?.cerrada ?? false
+
+  // Bug (2026-08-01): "Termina mi día" (cerrarJornadaEncargado) cierra TODAS
+  // las furgonetas abiertas del encargado hoy, aunque no hayan llegado a su
+  // cupo — si alguna tiene chofer asignado sin horas cerradas, esas horas
+  // se perdían para siempre (el chofer nunca aparecía en "Choferes
+  // pendientes de pago"). Se bloquea "REGISTRAR MIS HORAS" mientras exista
+  // cualquier furgoneta de hoy con chofer_pendiente, sin importar el cupo.
+  const furgonetasChoferPendiente = misFurgonetas.filter((f) => f.chofer_pendiente)
+  const hayChoferPendienteHoy = furgonetasChoferPendiente.length > 0
 
   // Corrección retroactiva — estado de "Mis horas" para la fecha elegida:
   //  'crear'    → sin jornada hoy, turno abierto esperando el primer cierre
@@ -297,6 +311,27 @@ export default function SeccionEncargadoPage() {
     } finally { setGuardando(false) }
   }
 
+  // Cierra las horas del chofer de la furgoneta activa — sin destajo, no
+  // afecta ningún ciclo de pago (ver src/lib/api/choferes.js).
+  const handleGuardarHorasChofer = async () => {
+    const horas = parseFloat(horasChofer)
+    if (Number.isNaN(horas) || horas < 0) {
+      setError('Ingresa un número de horas válido (≥ 0).')
+      return
+    }
+    setError(null); setGuardando(true)
+    try {
+      await cerrarHorasChofer({ tokenTurno, horas })
+      setHorasChofer('')
+      mostrarExito()
+      cargarMisFurgonetas()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setGuardando(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-app-bg">
       <Header
@@ -358,6 +393,36 @@ export default function SeccionEncargadoPage() {
               </p>
             </div>
           </div>
+        )}
+
+        {/* ── Horas del chofer: visible en cuanto hay un chofer asignado sin
+            horas cerradas en la furgoneta ACTIVA — a propósito NO depende de
+            que el cupo esté lleno (ver hayChoferPendienteHoy arriba: antes
+            solo vivía dentro de la tarjeta de "cupo completo", y "Termina mi
+            día" podía saltársela por completo). ── */}
+        {modo === 'idle' && !exito && furgonetaActiva?.chofer_pendiente && (
+          <Card className="!bg-gold/10 border border-gold/30">
+            <SectionTitle color="gold">Horas del chofer</SectionTitle>
+            <p className="text-xs text-gray-600 mb-3">
+              Falta registrar las horas del chofer de esta furgoneta — hace falta antes de
+              poder terminar tu día.
+            </p>
+            <Input
+              label="Horas del chofer"
+              type="number"
+              placeholder="8"
+              value={horasChofer}
+              onChange={(e) => setHorasChofer(e.target.value)}
+            />
+            <Button
+              variant="dark"
+              className="mt-3"
+              disabled={!horasChofer || guardando}
+              onClick={handleGuardarHorasChofer}
+            >
+              {guardando ? 'GUARDANDO…' : 'REGISTRAR HORAS DEL CHOFER'}
+            </Button>
+          </Card>
         )}
 
         {/* ── Registrados — primero en la pantalla: es el estado principal
@@ -444,6 +509,13 @@ export default function SeccionEncargadoPage() {
                   : ''} — turno cerrado
               </p>
             </div>
+
+            {furgonetaActiva?.chofer_pendiente && (
+              <p className="mt-2 text-xs text-amber-700">
+                Todavía falta registrar las horas del chofer — completa eso arriba, en
+                "Horas del chofer".
+              </p>
+            )}
             <p className="mt-2 text-xs text-amber-700">
               Ya no se pueden registrar más empleados ni temporales en esta furgoneta.
               Si tenés otra furgoneta hoy, entrá con "Entrar a otra furgoneta".
@@ -544,6 +616,22 @@ export default function SeccionEncargadoPage() {
                   <p className="text-gray-400 text-xs text-center py-2">
                     No hay turno registrado en esta fecha.
                   </p>
+                ) : estadoSelf === 'crear' && hayChoferPendienteHoy ? (
+                  // Bug (2026-08-01): sin este bloqueo, "Termina mi día" cerraba
+                  // la furgoneta con chofer asignado sin que sus horas quedaran
+                  // registradas nunca — el chofer se perdía sin poder pagarle.
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                    <p className="text-xs font-semibold text-amber-700 text-center">
+                      No puedes terminar tu día: falta registrar las horas del chofer en{' '}
+                      {furgonetasChoferPendiente.length === 1 ? 'esta furgoneta' : 'estas furgonetas'}
+                      {' '}({furgonetasChoferPendiente.map((f) => f.apodo).join(', ')}).
+                    </p>
+                    <p className="mt-1 text-[10px] text-amber-600 text-center">
+                      {furgonetasChoferPendiente.some((f) => f.furgoneta_id === vehiculoActivoId)
+                        ? 'Complétalas arriba, en "Horas del chofer".'
+                        : 'Entra a esa furgoneta con "Entrar a otra furgoneta" para completarlas.'}
+                    </p>
+                  </div>
                 ) : (
                   <>
                     <Button
