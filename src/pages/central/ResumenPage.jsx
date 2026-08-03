@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, FileSpreadsheet, Printer, Search, Download, Plus, X, Trash2 } from 'lucide-react'
+import { LogOut, FileSpreadsheet, Printer, Search, Download, Plus, X, Trash2, AlertTriangle } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
 import Header        from '../../components/layout/Header.jsx'
@@ -14,11 +14,17 @@ import Modal         from '../../components/ui/Modal.jsx'
 
 import { useAuthStore } from '../../store/authStore.js'
 import { logout } from '../../lib/api/auth.js'
-import { getResumenPagos } from '../../lib/api/records.js'
-import { getResumenPagosVehiculos } from '../../lib/api/vehicles.js'
+import {
+  getResumenPagos, getCicloPendienteDeConfirmar, confirmarCicloPagado,
+  esListaDeCicloConfirmado,
+} from '../../lib/api/records.js'
+import {
+  getResumenPagosVehiculos, getCicloPendienteDeConfirmarVehiculo,
+  confirmarCicloPagadoVehiculo,
+} from '../../lib/api/vehicles.js'
 import {
   getDatosCicloParaPago, generarListaPago, listarListasPago,
-  getItemsListaPagoConJornadas, cancelarListaPago
+  getItemsListaPagoConJornadas, cancelarListaPago, ocultarListaPago
 } from '../../lib/api/paymentLists.js'
 import {
   listarChoferesPendientesDePago, calcularPagoChofer, pagarChofer,
@@ -38,6 +44,34 @@ const CICLO_BADGE = {
   quincenal: 'bg-purple-50 text-purple-600',
   mensual:   'bg-blue-50 text-blue-600',
 }
+
+// Texto bajo cada StatCard de Resumen: qué ciclo se está pagando ahora
+// mismo (candado global, ver getCicloActivoAPagar/getCicloActivoAPagarVehiculo).
+// `periodo.label` ya viene armado desde ciclos.js ("01/07–14/07 · paga
+// 15/07"). Se recalcula fresco en cada carga de la página, así que en
+// cuanto ese ciclo llega a €0 (todos pagados), la siguiente carga ya
+// muestra el ciclo siguiente solo — sin ningún interruptor manual.
+function CicloAPagarBanner({ quincenal, mensual }) {
+  const Item = ({ tipo, label, periodo }) => (
+    <div className={`rounded-lg px-3 py-2 ${CICLO_BADGE[tipo]}`}>
+      <p className="text-[9px] font-bold uppercase tracking-wide opacity-70">{label}</p>
+      {periodo ? (
+        <p className="text-xs font-semibold whitespace-nowrap">
+          Del {fmtCorta(periodo.inicio)} al {fmtCorta(periodo.fin)}
+        </p>
+      ) : (
+        <p className="text-xs font-medium opacity-60">Sin ciclo pendiente</p>
+      )}
+    </div>
+  )
+  return (
+    <div className="grid grid-cols-2 gap-2 mb-3">
+      <Item tipo="quincenal" label="Quincenal" periodo={quincenal} />
+      <Item tipo="mensual" label="Mensual" periodo={mensual} />
+    </div>
+  )
+}
+
 
 // Eje de columnas día-por-día, compartido por la planilla del ciclo y la
 // lista de pago imprimible (cada una con su propio rango inicio/fin).
@@ -76,11 +110,110 @@ function fmtDiaMes(iso) {
 export default function ResumenPage() {
   const navigate = useNavigate()
   const { rol, clear } = useAuthStore()
-  const [stats, setStats] = useState({ quincenal: 0, mensual: 0 })
+  // { quincenal: { total, periodo }, mensual: { total, periodo } } — `periodo`
+  // es el ciclo A PAGAR (candado global, ver getCicloActivoAPagar), null si
+  // no hay nada pendiente de ningún ciclo de ese tipo.
+  const statsVacio = { quincenal: { total: 0, periodo: null }, mensual: { total: 0, periodo: null } }
+  const [stats, setStats] = useState(statsVacio)
   // Contador exclusivo de furgonetas — misma regla/ciclo que `stats`
   // (ver getResumenPagosVehiculos), pero sobre jornada_furgoneta /
   // adelanto_furgoneta en vez de jornada_empleado / adelanto_empleado.
-  const [statsVehiculos, setStatsVehiculos] = useState({ quincenal: 0, mensual: 0 })
+  const [statsVehiculos, setStatsVehiculos] = useState(statsVacio)
+
+  // Ciclos ya pagados por completo pero todavía sin confirmar/archivar.
+  // null por tipo mientras no haya nada que confirmar.
+  const confirmarVacio = { quincenal: null, mensual: null }
+  const [confirmarEmpleado, setConfirmarEmpleado] = useState(confirmarVacio)
+  const [confirmarVehiculo, setConfirmarVehiculo] = useState(confirmarVacio)
+  const [confirmandoCiclo, setConfirmandoCiclo] = useState(false)
+
+  // Alerta (Modal), no una tarjeta pasiva — el objetivo es avisar, no que
+  // pase desapercibido. "NO" no confirma nada (el ciclo se queda tal cual
+  // está); solo se descarta la ALERTA — vía `dismissedCiclos`, sin guardar
+  // nada en la BD — para no insistir de inmediato con el mismo. El ciclo
+  // descartado no desaparece: baja a un banner arriba de la página (ver
+  // `pendientesDescartados`) que se puede tocar para volver a abrir la
+  // misma alerta en cualquier momento, sin recargar la página. Si hay
+  // varios pendientes (ej. quincenal Y mensual a la vez), la alerta
+  // muestra de a uno.
+  const [dismissedCiclos, setDismissedCiclos] = useState(new Set())
+
+  const claveCiclo = (it) => `${it.tipoEntidad}-${it.tipo}-${it.periodo.fin}`
+
+  const itemsAConfirmar = useMemo(() => [
+    confirmarEmpleado.quincenal && { tipoEntidad: 'empleado', tipo: 'quincenal', periodo: confirmarEmpleado.quincenal },
+    confirmarEmpleado.mensual   && { tipoEntidad: 'empleado', tipo: 'mensual',   periodo: confirmarEmpleado.mensual },
+    confirmarVehiculo.quincenal && { tipoEntidad: 'furgoneta', tipo: 'quincenal', periodo: confirmarVehiculo.quincenal },
+    confirmarVehiculo.mensual   && { tipoEntidad: 'furgoneta', tipo: 'mensual',   periodo: confirmarVehiculo.mensual },
+  ].filter(Boolean), [confirmarEmpleado, confirmarVehiculo])
+
+  const colaConfirmar = useMemo(
+    () => itemsAConfirmar.filter((i) => !dismissedCiclos.has(claveCiclo(i))),
+    [itemsAConfirmar, dismissedCiclos]
+  )
+
+  // Ciclos ya completados que el admin descartó con "NO" — siguen 100%
+  // pendientes de confirmar, solo dejaron de mostrarse como alerta. Se
+  // listan en el banner de arriba para poder reabrir la alerta cuando
+  // quiera, en vez de tener que refrescar la página.
+  const pendientesDescartados = useMemo(
+    () => itemsAConfirmar.filter((i) => dismissedCiclos.has(claveCiclo(i))),
+    [itemsAConfirmar, dismissedCiclos]
+  )
+
+  const cicloAConfirmar = colaConfirmar[0] ?? null
+
+  const reabrirCicloDescartado = (item) => {
+    setDismissedCiclos((prev) => {
+      const next = new Set(prev)
+      next.delete(claveCiclo(item))
+      return next
+    })
+  }
+
+  const cargarConfirmaciones = useCallback(async () => {
+    try {
+      const [eq, em, fq, fm] = await Promise.all([
+        getCicloPendienteDeConfirmar('quincenal'),
+        getCicloPendienteDeConfirmar('mensual'),
+        getCicloPendienteDeConfirmarVehiculo('quincenal'),
+        getCicloPendienteDeConfirmarVehiculo('mensual'),
+      ])
+      setConfirmarEmpleado({ quincenal: eq, mensual: em })
+      setConfirmarVehiculo({ quincenal: fq, mensual: fm })
+    } catch (err) { console.error(err) }
+  }, [])
+
+  // "NO" / cerrar la alerta: no toca la base de datos — el ciclo se queda
+  // exactamente como estaba. Deja de aparecer como Modal y pasa al banner
+  // de arriba (pendientesDescartados), desde donde se reabre con un toque.
+  const descartarCicloAConfirmar = () => {
+    if (!cicloAConfirmar) return
+    setDismissedCiclos((prev) => new Set(prev).add(claveCiclo(cicloAConfirmar)))
+  }
+
+  const handleConfirmarCiclo = async () => {
+    if (!cicloAConfirmar) return
+    setConfirmandoCiclo(true)
+    try {
+      const { tipoEntidad, tipo, periodo } = cicloAConfirmar
+      if (tipoEntidad === 'empleado') await confirmarCicloPagado(tipo, periodo.fin)
+      else await confirmarCicloPagadoVehiculo(tipo, periodo.fin)
+      // Confirmar avanza el candado global al siguiente ciclo — recarga
+      // todo lo que depende de él (mismo trío que tras generar/cancelar una
+      // lista) para que "Resumen General"/"Resumen Furgonetas" y la Lista
+      // de Pago ya muestren el ciclo nuevo sin tener que refrescar la
+      // página entera.
+      await Promise.all([
+        cargarConfirmaciones(),
+        cargarCiclo(),
+        cargarListas(),
+        getResumenPagos().then(setStats),
+        getResumenPagosVehiculos().then(setStatsVehiculos),
+      ])
+    } catch (err) { console.error(err) }
+    finally { setConfirmandoCiclo(false) }
+  }
 
   // Cambio 1.4.1 / 1.4.2 (Séptima llamada): datos del ciclo activo,
   // compartidos entre la Lista de Pago y la Planilla imprimible.
@@ -116,6 +249,10 @@ export default function ResumenPage() {
   const [listaACancelar, setListaACancelar] = useState(null)
   const [cancelandoLista, setCancelandoLista] = useState(false)
   const [cancelarListaError, setCancelarListaError] = useState(null)
+  // true si el ciclo de listaACancelar ya se confirmó/archivó — en ese caso
+  // "CANCELAR" solo oculta la lista en vez de revertir el pago. null
+  // mientras se resuelve (ver handleAbrirCancelarLista).
+  const [listaACancelarEsConfirmada, setListaACancelarEsConfirmada] = useState(null)
 
   // ── Choferes: pago puramente informativo, sin ciclos ni jornadas — nunca
   // toca stats/datos/listas de arriba. "Pagar" recalcula en el momento
@@ -167,7 +304,8 @@ export default function ResumenPage() {
     if (rol !== 'admin') { navigate( Direccion.centralLogin , { replace: true }); return }
     getResumenPagos().then(setStats).catch(console.error)
     getResumenPagosVehiculos().then(setStatsVehiculos).catch(console.error)
-  }, [rol, navigate])
+    cargarConfirmaciones()
+  }, [rol, navigate, cargarConfirmaciones])
 
   const cargarCiclo = useCallback(async () => {
     setCargandoCiclo(true); setGenError(null)
@@ -275,10 +413,13 @@ export default function ResumenPage() {
       setSeleccionados(new Set())
       setEncargadoNombre('')
       setModoLista('idle')
-      // Recargar ciclo (los pagados salen del selector), el historial y el
-      // KPI de "Resumen General" — antes se quedaba con el monto viejo
-      // hasta refrescar la página entera.
-      await Promise.all([cargarListas(), cargarCiclo(), getResumenPagos().then(setStats)])
+      // Recargar ciclo (los pagados salen del selector), el historial, el
+      // KPI de "Resumen General" y si el ciclo quedó listo para confirmar
+      // — antes se quedaba con el monto viejo hasta refrescar la página
+      // entera.
+      await Promise.all([
+        cargarListas(), cargarCiclo(), getResumenPagos().then(setStats), cargarConfirmaciones(),
+      ])
     } catch (err) { setGenError(err.message) }
     finally { setGenerando(false) }
   }
@@ -307,16 +448,29 @@ export default function ResumenPage() {
     setTimeout(() => window.print(), 0)
   }
 
-  const handleAbrirCancelarLista = (lista) => {
+  const handleAbrirCancelarLista = async (lista) => {
     setCancelarListaError(null)
     setListaACancelar(lista)
+    // Se resuelve al abrir (no al confirmar) para poder mostrar el texto
+    // correcto del modal — "revierte el pago" vs "solo se oculta".
+    setListaACancelarEsConfirmada(null)
+    try {
+      setListaACancelarEsConfirmada(await esListaDeCicloConfirmado(lista.ciclo, lista.periodo_fin))
+    } catch (err) { console.error(err) }
   }
 
   const handleConfirmarCancelarLista = async () => {
     if (!listaACancelar) return
     setCancelandoLista(true); setCancelarListaError(null)
     try {
-      await cancelarListaPago(listaACancelar.id)
+      // Si el ciclo de esta lista ya se confirmó/archivó (alerta "Ciclo
+      // completado"), "cancelar" solo la oculta — el pago queda intacto, para no hacer
+      // que ese ciclo ya cerrado "resucite" como pendiente otra vez.
+      if (listaACancelarEsConfirmada) {
+        await ocultarListaPago(listaACancelar.id)
+      } else {
+        await cancelarListaPago(listaACancelar.id)
+      }
       setItemsPorLista((prev) => {
         const next = { ...prev }
         delete next[listaACancelar.id]
@@ -324,9 +478,13 @@ export default function ResumenPage() {
       })
       if (listaAbierta === listaACancelar.id) setListaAbierta(null)
       setListaACancelar(null)
+      setListaACancelarEsConfirmada(null)
       // Mismo trío que tras generar una lista: el dinero reaparece en
-      // "Resumen General" y los empleados vuelven al selector.
-      await Promise.all([cargarListas(), cargarCiclo(), getResumenPagos().then(setStats)])
+      // "Resumen General" y los empleados vuelven al selector (si de
+      // verdad se revirtió — si solo se ocultó, estos números no cambian).
+      await Promise.all([
+        cargarListas(), cargarCiclo(), getResumenPagos().then(setStats), cargarConfirmaciones(),
+      ])
     } catch (err) {
       setCancelarListaError(err.message)
     } finally {
@@ -420,11 +578,39 @@ export default function ResumenPage() {
         <HorizontalNav />
 
         <div className="px-4 pt-4 pb-6 max-w-md mx-auto space-y-4">
+          {/* ── Banner: ciclos completados que se descartaron con "NO" en la
+              alerta — siguen sin confirmar, solo dejaron de interrumpir.
+              Tocar uno reabre la misma alerta (Modal de abajo) al instante,
+              sin recargar la página. ── */}
+          {pendientesDescartados.length > 0 && (
+            <div className="rounded-xl border-2 border-amber-300 bg-amber-50 divide-y divide-amber-200 overflow-hidden shadow-sm">
+              {pendientesDescartados.map((it) => (
+                <button
+                  key={claveCiclo(it)}
+                  onClick={() => reabrirCicloDescartado(it)}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left"
+                >
+                  <AlertTriangle className="w-6 h-6 text-amber-500 shrink-0" />
+                  <span className="flex-1 text-sm font-medium text-amber-900 leading-snug">
+                    Ciclo{' '}
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${CICLO_BADGE[it.tipo]}`}>
+                      {it.tipo}
+                    </span>{' '}
+                    de {it.tipoEntidad === 'empleado' ? 'empleados' : 'furgonetas'} completado ({it.periodo.label})
+                    <br /><span className="text-xs text-amber-700">Falta confirmar para pasar al siguiente ciclo</span>
+                  </span>
+                  <span className="text-xs font-bold text-amber-700 shrink-0">VER →</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           <Card>
             <SectionTitle color="gold">Resumen General</SectionTitle>
+            <CicloAPagarBanner quincenal={stats.quincenal.periodo} mensual={stats.mensual.periodo} />
             <div className="grid grid-cols-2 gap-3">
-              <StatCard value={`€${stats.quincenal.toFixed(2)}`} label="Quincenales" color="gold" />
-              <StatCard value={`€${stats.mensual.toFixed(2)}`} label="Mensuales" color="navy" />
+              <StatCard value={`€${stats.quincenal.total.toFixed(2)}`} label="Quincenales" color="gold" />
+              <StatCard value={`€${stats.mensual.total.toFixed(2)}`} label="Mensuales" color="navy" />
             </div>
           </Card>
 
@@ -434,9 +620,10 @@ export default function ResumenPage() {
               empleados con furgonetas. ── */}
           <Card>
             <SectionTitle color="gold">Resumen Furgonetas</SectionTitle>
+            <CicloAPagarBanner quincenal={statsVehiculos.quincenal.periodo} mensual={statsVehiculos.mensual.periodo} />
             <div className="grid grid-cols-2 gap-3">
-              <StatCard value={`€${statsVehiculos.quincenal.toFixed(2)}`} label="Quincenales" color="gold" />
-              <StatCard value={`€${statsVehiculos.mensual.toFixed(2)}`} label="Mensuales" color="navy" />
+              <StatCard value={`€${statsVehiculos.quincenal.total.toFixed(2)}`} label="Quincenales" color="gold" />
+              <StatCard value={`€${statsVehiculos.mensual.total.toFixed(2)}`} label="Mensuales" color="navy" />
             </div>
           </Card>
 
@@ -556,17 +743,20 @@ export default function ResumenPage() {
                             onChange={() => toggleSeleccion(e)} />
                           <span className="min-w-0">
                             <span className="text-navy-dark truncate block">{e.nombre}</span>
-                            {e.puedePagar ? (
-                              // Arrastre: este empleado tiene días/adelantos de un ciclo
-                              // anterior sin pagar que se incluyen en este total.
-                              <span className="text-[9px] text-danger font-semibold">incluye ciclo anterior</span>
-                            ) : (
+                            {!e.puedePagar ? (
                               // Pago anticipado bloqueado: todo lo pendiente es del
                               // bloque activo, que todavía no llega a su día de pago.
                               <span className="text-[9px] text-gray-400 font-semibold">
                                 disponible el {datos.periodo.diaPago?.split('-').reverse().slice(0, 2).join('/')}
                               </span>
-                            )}
+                            ) : e.periodoInicioReal < datos.periodo.inicio ? (
+                              // Arrastre real: su fecha pendiente más antigua queda ANTES
+                              // del inicio oficial del ciclo activo — sí tiene días/adelantos
+                              // de un ciclo ya cerrado incluidos en este total. Si su fecha
+                              // más antigua ya cae dentro del ciclo activo, no es arrastre —
+                              // no se muestra ninguna etiqueta.
+                              <span className="text-[9px] text-danger font-semibold">incluye ciclo anterior</span>
+                            ) : null}
                           </span>
                           <span className="text-right font-semibold text-navy-dark">€{e.totalPagar.toFixed(2)}</span>
                         </label>
@@ -713,14 +903,18 @@ export default function ResumenPage() {
         )}
       </Modal>
 
-      {/* ── Cancelar lista de pago: revierte jornadas/adelantos a
-          fue_liquidado=false y borra el pago (RPC cancelar_lista_pago),
-          luego borra la lista. Mismo patrón de confirmación que "Eliminar
-          adelanto" / "Cancelar PIN" en el resto de la app. ── */}
+      {/* ── Cancelar lista de pago ──
+          Si el ciclo de esta lista NO se ha confirmado/archivado todavía:
+          revierte jornadas/adelantos a fue_liquidado=false y borra el pago
+          (RPC cancelar_lista_pago), luego borra la lista. Si el ciclo YA
+          se confirmó: solo la oculta (ocultar_lista_pago), el pago queda
+          intacto — ver handleAbrirCancelarLista/handleConfirmarCancelarLista.
+          Mismo patrón de confirmación que "Eliminar adelanto"/"Cancelar
+          PIN" en el resto de la app. ── */}
       <Modal
         open={!!listaACancelar}
         title="Cancelar lista de pago"
-        onClose={() => { if (!cancelandoLista) setListaACancelar(null) }}
+        onClose={() => { if (!cancelandoLista) { setListaACancelar(null); setListaACancelarEsConfirmada(null) } }}
       >
         {listaACancelar && (
           <>
@@ -730,21 +924,62 @@ export default function ResumenPage() {
               <strong>€{Number(listaACancelar.total_monto).toFixed(2)}</strong>.
             </p>
             <p className="text-xs text-gray-500 mb-4">
-              Se borran los pagos de esta lista y las jornadas/adelantos vuelven a quedar
-              pendientes — el sistema los recalcula solo en el ciclo activo. Esta acción no se
-              puede deshacer.
+              {listaACancelarEsConfirmada === null ? 'Verificando el ciclo…' : listaACancelarEsConfirmada ? (
+                <>Este ciclo ya está confirmado/archivado — la lista solo se <strong>ocultará</strong>,
+                  el pago queda intacto y no se revierte ningún dinero. Esta acción no se puede deshacer.</>
+              ) : (
+                <>Se borran los pagos de esta lista y las jornadas/adelantos vuelven a quedar
+                  pendientes — el sistema los recalcula solo en el ciclo activo. Esta acción no se
+                  puede deshacer.</>
+              )}
             </p>
             {cancelarListaError && <p className="text-danger text-xs mb-3">{cancelarListaError}</p>}
             <div className="grid grid-cols-2 gap-3">
-              <Button variant="outline" onClick={() => setListaACancelar(null)} disabled={cancelandoLista}>
+              <Button variant="outline" onClick={() => { setListaACancelar(null); setListaACancelarEsConfirmada(null) }} disabled={cancelandoLista}>
                 VOLVER
               </Button>
               <Button variant="outline" className="!border-danger !text-danger hover:!bg-danger hover:!text-white"
-                onClick={handleConfirmarCancelarLista} disabled={cancelandoLista}>
-                {cancelandoLista ? 'CANCELANDO…' : 'SÍ, CANCELAR'}
+                onClick={handleConfirmarCancelarLista} disabled={cancelandoLista || listaACancelarEsConfirmada === null}>
+                {cancelandoLista ? 'CANCELANDO…' : listaACancelarEsConfirmada ? 'SÍ, OCULTAR' : 'SÍ, CANCELAR'}
               </Button>
             </div>
           </>
+        )}
+      </Modal>
+
+      {/* ── Alerta: ciclo completamente pagado, ¿pasar al siguiente? ──
+          Aparece sola (no hay que ir a buscarla) en cuanto un ciclo llega
+          a €0 y todavía no se confirmó. "NO" no cambia nada en la BD — el
+          ciclo sigue sin confirmar y baja al banner de arriba
+          (pendientesDescartados), desde donde se puede reabrir esta misma
+          alerta cuando quiera. ── */}
+      <Modal
+        open={!!cicloAConfirmar}
+        title="Ciclo completado"
+        onClose={() => { if (!confirmandoCiclo) descartarCicloAConfirmar() }}
+      >
+        {cicloAConfirmar && (
+          <div className="space-y-4">
+            <p className="text-sm text-navy-dark">
+              Ya hiciste todos los pagos del ciclo{' '}
+              <strong className="capitalize">{cicloAConfirmar.tipo}</strong> de{' '}
+              <strong>{cicloAConfirmar.tipoEntidad === 'empleado' ? 'empleados' : 'furgonetas'}</strong>{' '}
+              ({cicloAConfirmar.periodo.label}). ¿Deseas pasar al siguiente ciclo?
+            </p>
+            <p className="text-xs text-gray-500">
+              Al confirmar, si más adelante cancelas una lista de este ciclo, solo se ocultará
+              (el pago no se revierte) — evita que este ciclo ya cerrado vuelva a aparecer como
+              pendiente. Si dices que no, no cambia nada por ahora.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <Button variant="outline" onClick={descartarCicloAConfirmar} disabled={confirmandoCiclo}>
+                NO
+              </Button>
+              <Button variant="primary" onClick={handleConfirmarCiclo} disabled={confirmandoCiclo}>
+                {confirmandoCiclo ? 'CONFIRMANDO…' : 'SÍ, PASAR AL SIGUIENTE'}
+              </Button>
+            </div>
+          </div>
         )}
       </Modal>
 

@@ -18,7 +18,7 @@ import {
   actualizarPlazasVehiculoDia, listarPlazasVehiculoPendientes,
   listarAdelantosVehiculoPendientes, registrarAdelantoVehiculo,
   actualizarMontoAdelantoVehiculo, eliminarAdelantoVehiculo,
-  promoverTipoPagoPendienteVehiculo,
+  promoverTipoPagoPendienteVehiculo, getCicloActivoAPagarVehiculo,
 } from '../../lib/api/vehicles.js'
 import { resolverPendientePeriodo } from '../../lib/api/workers.js'
 import { getHistorialPagosVehiculo, ejecutarPagoVehiculo } from '../../lib/api/records.js'
@@ -109,6 +109,12 @@ export default function VehiculoDetallePage() {
   const [savingPagar, setSavingPagar]       = useState(false)
   const [pagarError, setPagarError]         = useState(null)
 
+  // Ciclo A PAGAR (candado global, ver getCicloActivoAPagarVehiculo) — no
+  // "el ciclo de hoy". Requiere una consulta a la BD, así que se resuelve
+  // una vez en cargar() y se guarda aquí. null si no hay absolutamente
+  // nada pendiente de ningún ciclo para esta furgoneta.
+  const [periodoActivo, setPeriodoActivo] = useState(null)
+
   useEffect(() => {
     if (rol !== 'admin') navigate(Direccion.centralLogin, { replace: true })
   }, [rol, navigate])
@@ -127,12 +133,14 @@ export default function VehiculoDetallePage() {
         propietario: veh.propietario ?? '',
       })
 
-      // Cambio 1.5.4 (Octava llamada) + Migración 009: "Historial de Días"
-      // muestra los días de plazas_vehiculo pendientes de pago del ciclo
-      // activo (un total por vehículo+día) — al liquidarse pasan a
-      // "Historial de Pagos" y se ocultan de aquí. `tarifa_plaza_aplicada`
-      // es la tarifa congelada al registrar el día, no retroactiva.
-      setDiasVehiculo(await listarPlazasVehiculoPendientes(id))
+      // "Nómina Actual" y "Adelantos" solo deben mostrar el ciclo A PAGAR
+      // (candado global, ver getCicloActivoAPagarVehiculo) — no todo lo
+      // pendiente sin liquidar sin importar el ciclo, mismo criterio ya
+      // aplicado del lado de empleados. `tarifa_plaza_aplicada` es la
+      // tarifa congelada al registrar el día, no retroactiva.
+      const periodo = await getCicloActivoAPagarVehiculo(veh.tipo_pago ?? 'quincenal')
+      setPeriodoActivo(periodo)
+      setDiasVehiculo(await listarPlazasVehiculoPendientes(id, periodo?.fin))
 
       // Cambio 1.4.4 (Séptima llamada): pagos ya liquidados al dueño de la
       // furgoneta, dentro de la ventana de retención de datos.
@@ -140,7 +148,7 @@ export default function VehiculoDetallePage() {
       setPagos(pagos_data)
 
       // Cambio 1.5.3 (Séptima llamada): adelantos pendientes del vehículo.
-      setAdelantos(await listarAdelantosVehiculoPendientes(id))
+      setAdelantos(await listarAdelantosVehiculoPendientes(id, periodo?.fin))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -300,30 +308,23 @@ export default function VehiculoDetallePage() {
     }
   }
 
-  /* ── Pendiente #4: liquidar el ciclo activo del vehículo ──
+  /* ── Pendiente #4: liquidar el ciclo A PAGAR del vehículo ──
      Cierra jornadas y adelantos pendientes del período (RPC
      ejecutar_pago_vehiculo, migración 008) y deja el registro fijo en
-     Historial de Pagos. El período se calcula igual que en Resumen/Escanear,
-     según el tipo_pago (Quincenal/Mensual) del vehículo. */
-  const periodoActivo = useMemo(
-    () => calcularPeriodoCiclo(vehiculo?.tipo_pago ?? 'quincenal'),
-    [vehiculo?.tipo_pago]
-  )
+     Historial de Pagos. `periodoActivo` (candado global, ver
+     getCicloActivoAPagarVehiculo) ya se resolvió en `cargar()`. */
 
-  // Arrastre: si esta furgoneta tiene jornadas o adelantos pendientes de
-  // ANTES del inicio oficial del ciclo activo (un ciclo anterior que se
-  // quedó sin liquidar), "PAGAR" debe cobrarlos también — mismo criterio
-  // que `periodoInicioReal` ya usa `paymentLists.js` para empleados. Sin
-  // esto, `ejecutar_pago_furgoneta` recibía siempre el inicio OFICIAL como
-  // límite inferior: cualquier jornada fechada antes quedaba fuera del
-  // rango `[inicio, fin]` que liquida la RPC, así que el pago se registraba
-  // con total €0 (nada caía dentro del rango) y la jornada arrastrada se
-  // quedaba sin marcar como liquidada — reaparecía en "Nómina Actual" y
-  // seguía sumando en el contador de furgonetas.
+  // diasVehiculo/adelantos ya vienen acotados al ciclo a pagar desde
+  // `cargar()` — "Nómina Actual" y "Adelantos" solo muestran eso, mismo
+  // criterio que el resto de los contadores. Cualquier día/adelanto de un
+  // ciclo posterior no llega siquiera a estos arrays hasta que le toque su
+  // turno (candado global liquidado por completo).
+  const puedePagar = diasVehiculo.length > 0 || adelantos.length > 0
+
   const periodoInicioReal = useMemo(() => {
     const fechas = [...diasVehiculo.map((d) => d.fecha), ...adelantos.map((a) => a.fecha)].filter(Boolean)
-    return fechas.length ? [...fechas, periodoActivo.inicio].sort()[0] : periodoActivo.inicio
-  }, [diasVehiculo, adelantos, periodoActivo.inicio])
+    return fechas.length ? fechas.sort()[0] : periodoActivo?.inicio
+  }, [diasVehiculo, adelantos, periodoActivo?.inicio])
 
   const handlePagarVehiculo = async () => {
     setSavingPagar(true); setPagarError(null)
@@ -331,6 +332,8 @@ export default function VehiculoDetallePage() {
       await ejecutarPagoVehiculo({
         vehiculoId: id,
         periodoInicio: periodoInicioReal,
+        // periodoActivo ya ES el ciclo específico a pagar
+        // (getCicloActivoAPagarVehiculo), nunca "el ciclo de hoy".
         periodoFin: periodoActivo.fin,
       })
       // Justo después de un pago exitoso: si esta furgoneta tenía un cambio
@@ -378,11 +381,18 @@ export default function VehiculoDetallePage() {
 
   // Usa la tarifa congelada por día (`tarifa_plaza_aplicada`, migración
   // 009); cae a la tarifa actual del vehículo como fallback solo para
-  // filas anteriores a esa migración (quedaron con NULL).
-  const totalAPagar = diasVehiculo.reduce(
+  // filas anteriores a esa migración (quedaron con NULL). `diasVehiculo`
+  // ya viene acotado al ciclo cerrado (finArrastre) desde `cargar()`.
+  const totalDevengado = diasVehiculo.reduce(
     (acc, d) => acc + d.plazas * (d.tarifa_plaza_aplicada ?? (vehiculo.tarifa_plaza || 0)),
     0
   )
+  // Bug fix: esto faltaba — el lado de empleados sí resta los adelantos
+  // (totalPagar = totalDevengado - totalAdelantos en paymentLists.js), pero
+  // aquí "totalAPagar" nunca los tocaba, así que la furgoneta se veía (y se
+  // liquidaba) por el devengado completo, ignorando lo ya adelantado.
+  const totalAdelantosPendientes = adelantos.reduce((s, a) => s + Number(a.monto), 0)
+  const totalAPagar = totalDevengado - totalAdelantosPendientes
 
   return (
     <div className="min-h-screen bg-app-bg">
@@ -567,8 +577,8 @@ export default function VehiculoDetallePage() {
                 </div>
               ))}
               <div className="grid grid-cols-5 gap-2 p-2 bg-primary/10 border-t border-gray-200 text-xs font-bold text-primary">
-                <span className="col-span-3 text-right">TOTAL A PAGAR:</span>
-                <span className="text-right">€{totalAPagar.toFixed(2)}</span>
+                <span className="col-span-3 text-right">SUBTOTAL JORNADAS:</span>
+                <span className="text-right">€{totalDevengado.toFixed(2)}</span>
                 <span></span>
               </div>
             </div>
@@ -635,11 +645,30 @@ export default function VehiculoDetallePage() {
           </Button>
         </Card>
 
+        {puedePagar && (
+          <div className="bg-gray-50 rounded-xl p-3 space-y-1 text-xs">
+            <div className="flex justify-between">
+              <span className="text-gray-500">Devengado</span>
+              <span className="font-semibold text-navy-dark">€{totalDevengado.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Adelantos</span>
+              <span className="font-semibold text-danger">−€{totalAdelantosPendientes.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between pt-1 border-t border-gray-200">
+              <span className="text-gray-700 font-semibold">Neto a pagar</span>
+              <span className={`font-bold ${totalAPagar < 0 ? 'text-danger' : 'text-primary'}`}>
+                €{totalAPagar.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           <Button variant="outline" onClick={() => navigate(Direccion.CentralVehiculos)}>VOLVER</Button>
           <Button
             variant="primary"
-            disabled={diasVehiculo.length === 0 && adelantos.length === 0}
+            disabled={!puedePagar}
             onClick={() => { setPagarError(null); setPagarModalOpen(true) }}
           >
             PAGAR
@@ -725,10 +754,25 @@ export default function VehiculoDetallePage() {
         <div className="space-y-4">
           {pagarError && <p className="text-danger text-xs">{pagarError}</p>}
           <p className="text-gray-600 text-sm">
-            ¿Liquidar el ciclo <strong className="capitalize">{vehiculo.tipo_pago}</strong> ({periodoActivo.label}) de{' '}
-            <strong>{vehiculo.nombre}</strong> por un total de <strong>€{totalAPagar.toFixed(2)}</strong>?
-            Las jornadas y adelantos pendientes de este período pasarán al Historial de Pagos.
+            ¿Liquidar el ciclo <strong className="capitalize">{vehiculo.tipo_pago}</strong> ({periodoActivo?.label}) de{' '}
+            <strong>{vehiculo.nombre}</strong>? Las jornadas y adelantos pendientes de este período pasarán al Historial de Pagos.
           </p>
+          <div className="bg-gray-50 rounded-xl p-3 space-y-1 text-xs">
+            <div className="flex justify-between">
+              <span className="text-gray-500">Devengado</span>
+              <span className="font-semibold text-navy-dark">€{totalDevengado.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Adelantos</span>
+              <span className="font-semibold text-danger">−€{totalAdelantosPendientes.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between pt-1 border-t border-gray-200">
+              <span className="text-gray-700 font-semibold">Neto a pagar</span>
+              <span className={`font-bold ${totalAPagar < 0 ? 'text-danger' : 'text-primary'}`}>
+                €{totalAPagar.toFixed(2)}
+              </span>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Button variant="outline" onClick={() => setPagarModalOpen(false)} disabled={savingPagar}>
               CANCELAR

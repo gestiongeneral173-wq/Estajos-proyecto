@@ -2,9 +2,8 @@ import { supabase } from '../supabase.js'
 import { listarTrabajadores, promoverTipoPagoPendiente } from './workers.js'
 import {
   getJornadasTrabajadorPorPeriodo, getAdelantosPendientes, ejecutarPago,
-  getJornadasTrabajadorHistorico,
+  getJornadasTrabajadorHistorico, getCicloActivoAPagar,
 } from './records.js'
-import { calcularPeriodoCiclo } from './ciclos.js'
 
 /**
  * ─── LISTA DE PAGO (Cambio 1.4.1 · revisado en la Décima entrega) ───────
@@ -16,29 +15,28 @@ import { calcularPeriodoCiclo } from './ciclos.js'
  * encargado que reparte el efectivo. Aplica solo al ciclo quincenal.
  */
 
-// Trae los empleados del ciclo con sus jornadas y adelantos pendientes
-// HASTA el fin del período activo (sin límite inferior — ver
-// getJornadasTrabajadorPorPeriodo), y los totales ya calculados
-// (horas·tarifa + destajo − adelantos). Base de datos compartida por la
-// Planilla (1.4.2) y la Lista de Pago (1.4.1): ambas muestran exactamente
-// los mismos números.
-//
-// Arrastre de ciclos cerrados sin pagar: si un empleado tiene jornadas o
-// adelantos de ANTES del inicio oficial del ciclo (un ciclo anterior que se
-// cerró sin liquidarle), igual entran aquí — así el admin los ve y los paga
-// junto con el ciclo activo, en vez de quedar invisibles para siempre. Por
-// eso se calcula `periodoInicioReal`: la fecha más antigua realmente
-// pendiente de este empleado (o el inicio oficial si no hay arrastre). Es la
-// que se le debe pasar a `ejecutarPago` — el RPC del servidor solo liquida
-// lo que cae en `[p_inicio, p_fin]`, así que si aquí se le cobra al admin
-// ese arrastre pero al pagar se le manda el inicio oficial (más tarde), esos
-// días viejos nunca se marcarían como liquidados en el servidor.
+// Trae los empleados del CICLO A PAGAR (candado global, ver
+// getCicloActivoAPagar — nunca "el ciclo de hoy") con sus jornadas y
+// adelantos pendientes hasta el fin de ESE ciclo, y los totales ya
+// calculados (horas·tarifa + destajo − adelantos). Base de datos
+// compartida por la Planilla (1.4.2) y la Lista de Pago (1.4.1): ambas
+// muestran exactamente los mismos números.
 export async function getDatosCicloParaPago(ciclo) {
-  const periodo = calcularPeriodoCiclo(ciclo)
+  const periodo = await getCicloActivoAPagar(ciclo)
+
+  // Nada pendiente de ningún ciclo de este tipo_pago: no hay período que
+  // mostrar ni empleados que listar.
+  if (!periodo) return { periodo: null, empleados: [] }
+
   const empleados = await listarTrabajadores({ periodo: ciclo })
 
   const conDatos = await Promise.all(
     empleados.map(async (e) => {
+      // periodo.fin ya es el fin exacto del ciclo a pagar (el más viejo con
+      // algo pendiente en TODA la nómina) — un empleado sin nada dentro de
+      // ese rango simplemente no tiene nada que cobrar todavía, aunque
+      // tenga trabajo más reciente en un ciclo posterior (queda bloqueado
+      // hasta que este ciclo se liquide para todos).
       const [jornadas, adelantos] = await Promise.all([
         getJornadasTrabajadorPorPeriodo(e.id, null, periodo.fin),
         getAdelantosPendientes(e.id, null, periodo.fin),
@@ -53,17 +51,13 @@ export async function getDatosCicloParaPago(ciclo) {
       const totalAdelantos = adelantos.reduce((s, a) => s + Number(a.monto), 0)
 
       const fechas = [...jornadas.map((j) => j.fecha), ...adelantos.map((a) => a.fecha)].filter(Boolean)
-      const periodoInicioReal = fechas.length ? [...fechas, periodo.inicio].sort()[0] : periodo.inicio
+      const periodoInicioReal = fechas.length ? fechas.sort()[0] : periodo.inicio
 
-      // Bloqueo de pago anticipado: solo se desbloquea si hay arrastre —
-      // algo fechado antes del inicio del bloque activo, es decir, de un
-      // bloque que YA cerró y tiene derecho a cobrarse ya. Si todo lo
-      // pendiente es del bloque en curso (periodoInicioReal === inicio),
-      // sigue bloqueado hasta que ese bloque llegue a su día de pago — lo
-      // cual pasa solo (sin ninguna comparación de fecha aparte): en cuanto
-      // el bloque activo avance, esas mismas fechas quedan antes del nuevo
-      // inicio y se vuelven arrastre.
-      const puedePagar = periodoInicioReal < periodo.inicio
+      // Bloqueo de pago anticipado: como jornadas/adelantos ya vienen
+      // acotados a fecha ≤ finArrastre (ciclos cerrados), basta con que
+      // exista algo para que sea pagable — ya no hace falta comparar contra
+      // periodo.inicio.
+      const puedePagar = fechas.length > 0
 
       return {
         ...e,
@@ -109,6 +103,9 @@ export async function generarListaPago({ ciclo, periodo, items, encargado }) {
     const pago = await ejecutarPago({
       empleadoId: i.empleadoId,
       periodoInicio: i.periodoInicio ?? periodo.inicio,
+      // periodo.fin: aquí `periodo` ya ES el ciclo específico a pagar
+      // (getCicloActivoAPagar), nunca "el ciclo de hoy" — liquida
+      // exactamente ese rango, nada más nuevo.
       periodoFin: periodo.fin,
     })
     // Justo después de un pago exitoso: si este empleado tenía un cambio de
@@ -165,6 +162,7 @@ export async function listarListasPago() {
   const { data, error } = await supabase
     .from('lista_pago_quincenal')
     .select('id, ciclo, periodo_inicio, periodo_fin, total_monto:monto_total, encargado, created_at')
+    .eq('oculta', false)
     .order('created_at', { ascending: false })
   if (error) throw new Error(error.message)
   return data ?? []
@@ -197,6 +195,17 @@ export async function getItemsListaPago(listaId) {
 // listas/ciclo/stats después (mismo trío que tras generar una lista).
 export async function cancelarListaPago(listaId) {
   const { error } = await supabase.rpc('cancelar_lista_pago', { p_lista_id: listaId })
+  if (error) throw new Error(error.message)
+}
+
+// "Ocultar" (2026-08-02): para una lista de un ciclo ya CONFIRMADO/
+// archivado (ver confirmarCicloPagado en records.js) — a diferencia de
+// cancelarListaPago, esto NO revierte el pago (las jornadas/adelantos
+// siguen liquidados) ni borra la lista, solo deja de mostrarla en
+// "Listas generadas". Evita que cancelar algo de un ciclo ya dado por
+// cerrado haga "resucitar" ese ciclo como pendiente otra vez.
+export async function ocultarListaPago(listaId) {
+  const { error } = await supabase.rpc('ocultar_lista_pago', { p_lista_id: listaId })
   if (error) throw new Error(error.message)
 }
 

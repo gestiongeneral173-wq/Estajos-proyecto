@@ -248,12 +248,20 @@ export async function darDeBajaTrabajador({ id, montoEsperado, periodoInicio, pe
 }
 
 /**
- * Balance pendiente del trabajador (RPC).
- * Solo el admin lo usa — el encargado no ve salarios por diseño.
+ * Balance pendiente del trabajador (RPC). Solo el admin lo usa — el
+ * encargado no ve salarios por diseño.
+ *
+ * `fechaFin` es obligatorio: la RPC ya NO calcula fechas por su cuenta
+ * (tenía su propio corte de calendario fijo, 1-15/16-fin de mes, que se
+ * desincronizó del modelo rodante — bug real encontrado en testeo
+ * 2026-08-02). El caller debe resolverlo con `getCicloActivoAPagar`
+ * (`records.js`) — el ciclo específico a pagar (candado global), no
+ * cualquier fecha suelta. `null`/vacío → sin nada pendiente, saldo 0.
  */
-export async function getBalanceTrabajador(id) {
+export async function getBalanceTrabajador(id, fechaFin) {
+  if (!fechaFin) return 0
   const { data, error } = await supabase
-    .rpc('calcular_balance_trabajador', { p_empleado_id: id })
+    .rpc('calcular_balance_trabajador', { p_empleado_id: id, p_fin_arrastre: fechaFin })
   if (error) throw new Error(error.message)
   return Number(data) || 0
 }

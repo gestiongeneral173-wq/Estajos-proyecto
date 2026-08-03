@@ -33,6 +33,7 @@ import {
   actualizarJornadaTrabajador,
   actualizarMontoAdelantoEmpleado,
   eliminarAdelantoEmpleado,
+  getCicloActivoAPagar,
 } from '../../lib/api/records.js'
 import { useRealtime } from '../../hooks/useRealtime.js'
 import { calcularPeriodoCiclo } from '../../lib/api/ciclos.js'
@@ -137,12 +138,18 @@ export default function TrabajadorDetallePage() {
     if (!id) return
     setLoading(true); setError(null)
     try {
-      const [t, b, p, a, j] = await Promise.all([
-        getTrabajadorPorId(id),
-        getBalanceTrabajador(id).catch(() => 0),
+      // getTrabajadorPorId primero, fuera del Promise.all: getCicloActivoAPagar
+      // necesita su payment_period para saber qué ciclo (candado global,
+      // no "el ciclo de hoy") resolver — "Saldo neto", "Nómina Actual" y
+      // "Adelantos" solo deben mostrar ese ciclo, no todo lo pendiente sin
+      // liquidar.
+      const t = await getTrabajadorPorId(id)
+      const periodo = await getCicloActivoAPagar(t.payment_period)
+      const [b, p, a, j] = await Promise.all([
+        getBalanceTrabajador(id, periodo?.fin).catch(() => 0),
         getHistorialPagos(id).catch(() => []),
-        getHistorialAdelantos(id).catch(() => []),
-        getJornadasTrabajador(id).catch(() => []),
+        getHistorialAdelantos(id, periodo?.fin).catch(() => []),
+        getJornadasTrabajador(id, periodo?.fin).catch(() => []),
       ])
       setTrabajador(t)
       setBalance(b)

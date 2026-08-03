@@ -63,26 +63,106 @@ export async function getVehiculoPorId(id) {
   return mapFurgoneta(data)
 }
 
+/* ─── Ciclo global a pagar — Furgonetas ────────────────────────────────
+ * Espejo de records.js (ver el comentario largo ahí): candado global por
+ * tipo_pago, un ciclo a la vez, con confirmación explícita del admin antes
+ * de exponer el siguiente. Dos piezas internas:
+ *   - cicloCandidatoPendienteVehiculo: el bloque que contiene la fecha
+ *     pendiente más antigua de TODA la flota de ese tipo_pago (null si no
+ *     queda nada pendiente).
+ *   - cicloSinConfirmarAntesDeVehiculo: un ciclo ya pagado por completo
+ *     (fecha_cierre_ciclo) pero que el admin todavía no confirmó en
+ *     ciclo_confirmado — si existe, es ese el que hay que seguir
+ *     mostrando (el candado no avanza hasta que se confirme).
+ */
+async function cicloCandidatoPendienteVehiculo(tipoPago) {
+  if (tipoPago !== 'quincenal' && tipoPago !== 'mensual') return null
+
+  const [jor, adel] = await Promise.all([
+    supabase.from('jornada_furgoneta')
+      .select('fecha_trabajo, furgoneta:furgoneta_id!inner(tipo_pago)')
+      .eq('fue_liquidado', false)
+      .not('fecha_trabajo', 'is', null)
+      .eq('furgoneta.tipo_pago', tipoPago)
+      .order('fecha_trabajo', { ascending: true })
+      .limit(1),
+    supabase.from('adelanto_furgoneta')
+      .select('fecha_adelanto, furgoneta:furgoneta_id!inner(tipo_pago)')
+      .eq('fue_liquidado', false)
+      .eq('furgoneta.tipo_pago', tipoPago)
+      .order('fecha_adelanto', { ascending: true })
+      .limit(1),
+  ])
+  if (jor.error) throw new Error(jor.error.message)
+  if (adel.error) throw new Error(adel.error.message)
+
+  const fechas = [
+    soloFecha(jor.data?.[0]?.fecha_trabajo),
+    adel.data?.[0]?.fecha_adelanto,
+  ].filter(Boolean)
+  if (fechas.length === 0) return null
+
+  const masAntigua = fechas.sort()[0]
+  return calcularPeriodoCiclo(tipoPago, new Date(`${masAntigua}T12:00:00`))
+}
+
+async function cicloSinConfirmarAntesDeVehiculo(tipoPago, tope) {
+  let query = supabase
+    .from('pago_furgoneta')
+    .select('fecha_cierre_ciclo, furgoneta:furgoneta_id!inner(tipo_pago)')
+    .eq('furgoneta.tipo_pago', tipoPago)
+  if (tope) query = query.lte('fecha_cierre_ciclo', tope)
+  const { data, error } = await query
+  if (error) throw new Error(error.message)
+
+  const cerrados = [...new Set((data ?? []).map((r) => soloFecha(r.fecha_cierre_ciclo)))].sort()
+  if (cerrados.length === 0) return null
+
+  const { data: confirmados, error: errC } = await supabase
+    .from('ciclo_confirmado')
+    .select('periodo_fin')
+    .eq('tipo_entidad', 'furgoneta')
+    .eq('tipo_pago', tipoPago)
+  if (errC) throw new Error(errC.message)
+  const yaConfirmados = new Set((confirmados ?? []).map((r) => r.periodo_fin))
+
+  const finSinConfirmar = cerrados.find((f) => !yaConfirmados.has(f))
+  if (!finSinConfirmar) return null
+
+  return calcularPeriodoCiclo(tipoPago, new Date(`${finSinConfirmar}T12:00:00`))
+}
+
+export async function getCicloActivoAPagarVehiculo(tipoPago) {
+  const candidato = await cicloCandidatoPendienteVehiculo(tipoPago)
+  const sinConfirmar = await cicloSinConfirmarAntesDeVehiculo(tipoPago, candidato?.inicio ?? null)
+  return sinConfirmar ?? candidato
+}
+
+// Espejo de getCicloPendienteDeConfirmar (records.js). Hoy no hay ningún
+// mecanismo de "cancelar" pago de furgoneta, así que esto es solo para que
+// el admin lleve el mismo registro/control que en empleados.
+export async function getCicloPendienteDeConfirmarVehiculo(tipoPago) {
+  const candidato = await cicloCandidatoPendienteVehiculo(tipoPago)
+  return cicloSinConfirmarAntesDeVehiculo(tipoPago, candidato?.inicio ?? null)
+}
+
+export async function confirmarCicloPagadoVehiculo(tipoPago, periodoFin) {
+  const { error } = await supabase
+    .from('ciclo_confirmado')
+    .insert({ tipo_entidad: 'furgoneta', tipo_pago: tipoPago, periodo_fin: periodoFin })
+  if (error) throw new Error(error.message)
+}
+
 /* ─── Resumen de pagos pendientes — Furgonetas (Panel Central) ────────
- * Mismo criterio y misma fuente de verdad de ciclo que getResumenPagos
- * (records.js), pero exclusivo de furgonetas: jornada_furgoneta
- * (plazas_ocupadas × tarifa_aplicada) y adelanto_furgoneta pendientes,
- * agrupados por el `tipo_pago` propio de CADA furgoneta y acotados por el
- * fin de su ciclo activo (calcularPeriodoCiclo — única fuente de verdad,
- * compartida con empleados). Igual que en empleados, sin límite inferior a
- * propósito: una furgoneta con arrastre de un ciclo cerrado sin pagar
- * sigue sumando aquí hasta que se liquide.
+ * Mismo criterio que getResumenPagos (records.js): candado global de un
+ * ciclo a la vez (getCicloActivoAPagarVehiculo), no "el ciclo de hoy".
  */
 export async function getResumenPagosVehiculos() {
-  const periodos = {
-    quincenal: calcularPeriodoCiclo('quincenal'),
-    mensual:   calcularPeriodoCiclo('mensual'),
-  }
-  const dentroDelCiclo = (fecha, tipo) => {
-    const p = periodos[tipo]
-    if (!p || !fecha) return false
-    return soloFecha(fecha) <= p.fin
-  }
+  const [periodoQ, periodoM] = await Promise.all([
+    getCicloActivoAPagarVehiculo('quincenal'),
+    getCicloActivoAPagarVehiculo('mensual'),
+  ])
+  const periodos = { quincenal: periodoQ, mensual: periodoM }
 
   const [jornadas, adelantos] = await Promise.all([
     supabase.from('jornada_furgoneta')
@@ -98,20 +178,27 @@ export async function getResumenPagosVehiculos() {
   const resumen = { quincenal: 0, mensual: 0 }
 
   jornadas.data?.forEach((j) => {
-    const tipo = j.furgoneta?.tipo_pago
-    if (tipo !== 'quincenal' && tipo !== 'mensual') return
-    if (!dentroDelCiclo(j.fecha_trabajo, tipo)) return
-    resumen[tipo] += Number(j.plazas_ocupadas || 0) * Number(j.tarifa_aplicada || 0)
+    const periodo = periodos[j.furgoneta?.tipo_pago]
+    if (!periodo) return
+    const fecha = soloFecha(j.fecha_trabajo)
+    if (!fecha || fecha > periodo.fin) return
+    resumen[j.furgoneta.tipo_pago] += Number(j.plazas_ocupadas || 0) * Number(j.tarifa_aplicada || 0)
   })
 
   adelantos.data?.forEach((a) => {
-    const tipo = a.furgoneta?.tipo_pago
-    if (tipo !== 'quincenal' && tipo !== 'mensual') return
-    if (!dentroDelCiclo(a.fecha_adelanto, tipo)) return
-    resumen[tipo] -= Number(a.monto || 0)
+    const periodo = periodos[a.furgoneta?.tipo_pago]
+    if (!periodo) return
+    if (!a.fecha_adelanto || a.fecha_adelanto > periodo.fin) return
+    resumen[a.furgoneta.tipo_pago] -= Number(a.monto || 0)
   })
 
-  return resumen
+  // Igual que getResumenPagos (records.js): el total viaja junto con el
+  // propio ciclo que se está pagando, para que ResumenPage muestre
+  // "Ciclo a pagar: ..." y avance solo en cuanto llegue a €0.
+  return {
+    quincenal: { total: resumen.quincenal, periodo: periodoQ },
+    mensual:   { total: resumen.mensual,   periodo: periodoM },
+  }
 }
 
 // Traduce el error crudo de Postgres del CHECK(costo_plaza > 0) a un mensaje
@@ -223,15 +310,20 @@ export async function actualizarPlazasVehiculoDia(id, plazas) {
   return data
 }
 
-// Días pendientes de pago de la furgoneta (para "Historial de Días").
-export async function listarPlazasVehiculoPendientes(vehiculoId) {
-  const { data, error } = await supabase
+// Días pendientes de pago de la furgoneta (para "Nómina Actual"/"Historial
+// de Días"). `fechaFin` (se le pasa `finArrastre` desde VehiculoDetallePage):
+// solo muestra los días del ciclo YA CERRADO, igual que "Nómina Actual" del
+// lado de empleados — sin ella, mezclaba el ciclo cerrado con cualquier día
+// del bloque activo.
+export async function listarPlazasVehiculoPendientes(vehiculoId, fechaFin) {
+  let query = supabase
     .from('jornada_furgoneta')
     .select('id, fecha:fecha_trabajo, plazas:plazas_ocupadas, tarifa_plaza_aplicada:tarifa_aplicada')
     .eq('furgoneta_id', vehiculoId)
     .eq('fue_liquidado', false)
     .not('fecha_trabajo', 'is', null)
-    .order('fecha_trabajo', { ascending: false })
+  if (fechaFin) query = query.lte('fecha_trabajo', `${fechaFin}T23:59:59.999`)
+  const { data, error } = await query.order('fecha_trabajo', { ascending: false })
   if (error) throw new Error(error.message)
   // Tarifa congelada al abrir el turno (jornada_furgoneta.tarifa_aplicada,
   // H-11 cerrado) — ya no se aproxima con el costo_plaza en vivo.
@@ -246,13 +338,16 @@ export async function listarPlazasVehiculoPendientes(vehiculoId) {
 
 /* ─── Adelantos de furgoneta ─────────────────────────────────────────── */
 
-export async function listarAdelantosVehiculoPendientes(vehiculoId) {
-  const { data, error } = await supabase
+// `fechaFin` (se le pasa `finArrastre` desde VehiculoDetallePage): solo
+// muestra adelantos del ciclo YA CERRADO, mismo criterio que el resto.
+export async function listarAdelantosVehiculoPendientes(vehiculoId, fechaFin) {
+  let query = supabase
     .from('adelanto_furgoneta')
     .select('id, concepto, monto, fecha_adelanto, fue_liquidado')
     .eq('furgoneta_id', vehiculoId)
     .eq('fue_liquidado', false)
-    .order('fecha_adelanto', { ascending: false })
+  if (fechaFin) query = query.lte('fecha_adelanto', fechaFin)
+  const { data, error } = await query.order('fecha_adelanto', { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []).map((a) => ({
     id: a.id, concepto: a.concepto, monto: Number(a.monto),
@@ -260,12 +355,17 @@ export async function listarAdelantosVehiculoPendientes(vehiculoId) {
   }))
 }
 
-export async function getTotalAdelantosVehiculoPendientes(vehiculoId) {
+// `fechaFin` (resuelto por el caller con getCicloActivoAPagarVehiculo —
+// el ciclo específico a pagar, candado global): solo cuenta adelantos de
+// ESE ciclo. Sin ella (nada pendiente de ningún ciclo), devuelve 0.
+export async function getTotalAdelantosVehiculoPendientes(vehiculoId, fechaFin) {
+  if (!fechaFin) return 0
   const { data, error } = await supabase
     .from('adelanto_furgoneta')
-    .select('monto')
+    .select('monto, fecha_adelanto')
     .eq('furgoneta_id', vehiculoId)
     .eq('fue_liquidado', false)
+    .lte('fecha_adelanto', fechaFin)
   if (error) throw new Error(error.message)
   return (data ?? []).reduce((s, a) => s + Number(a.monto || 0), 0)
 }
