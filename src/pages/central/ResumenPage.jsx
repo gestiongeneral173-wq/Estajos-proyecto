@@ -991,8 +991,8 @@ export default function ResumenPage() {
         printVisible={listaAImprimir === null} />
 
       {/* ── Lista de pago imprimible: mismo formato día-por-día que la
-          planilla pero solo para los empleados de esta lista, con columna
-          de firma — visible al imprimir "IMPRIMIR" dentro de una lista. ── */}
+          planilla pero solo para los empleados de esta lista — visible al
+          imprimir "IMPRIMIR" dentro de una lista. ── */}
       <ListaPagoImprimible lista={listaImpresa} items={itemsPorLista[listaAImprimir]}
         dias={diasListaImpresa} printVisible={listaAImprimir !== null} />
     </>
@@ -1105,7 +1105,7 @@ function PlanillaImprimible({ ciclo, periodo, empleados, dias, printVisible }) {
 // Bug fix (Séptima llamada): "IMPRIMIR" en una lista de pago imprimía la
 // planilla completa (único bloque con `print:block`). Ahora imprime solo
 // los empleados de esa lista, con el mismo formato día-por-día que la
-// planilla (columnas de color) más una columna de firma al final.
+// planilla (columnas de color).
 function ListaPagoImprimible({ lista, items, dias, printVisible }) {
   if (!lista) return null
 
@@ -1138,7 +1138,6 @@ function ListaPagoImprimible({ lista, items, dias, printVisible }) {
             <th className="border border-gray-400 p-1" style={{ background: '#add8e6' }}>Total</th>
             <th className="border border-gray-400 bg-gray-100 p-1">Debe</th>
             <th className="border border-gray-400 p-1" style={{ background: '#1f4e78', color: '#fff' }}>Pagar</th>
-            <th className="border border-gray-400 p-1" style={{ background: '#1f4e78', color: '#fff' }}>Firma</th>
           </tr>
         </thead>
         <tbody>
@@ -1166,7 +1165,6 @@ function ListaPagoImprimible({ lista, items, dias, printVisible }) {
                 <td className="border border-gray-300 p-1 text-right">€{Number(it.total_devengado).toFixed(2)}</td>
                 <td className="border border-gray-300 p-1 text-right">€{Number(it.total_adelantos).toFixed(2)}</td>
                 <td className="border border-gray-300 p-1 text-right font-bold">€{Number(it.total_pagado).toFixed(2)}</td>
-                <td className="border border-gray-300 p-1"></td>
               </tr>
             )
           })}
@@ -1179,7 +1177,6 @@ function ListaPagoImprimible({ lista, items, dias, printVisible }) {
             <td className="border border-gray-400 p-1 text-right">€{totalGanado.toFixed(2)}</td>
             <td className="border border-gray-400 p-1 text-right">€{totalAdelantos.toFixed(2)}</td>
             <td className="border border-gray-400 p-1 text-right">€{(totalGanado - totalAdelantos).toFixed(2)}</td>
-            <td className="border border-gray-400 p-1"></td>
           </tr>
         </tbody>
       </table>

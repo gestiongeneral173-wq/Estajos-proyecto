@@ -3,6 +3,15 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // ID único de esta build (fijado una sola vez, al arrancar `vite build` o
+  // `vite dev` — no en cada request). `main.jsx` lo compara contra el que
+  // quedó guardado en localStorage del dispositivo: si no coincide, es una
+  // actualización nueva y borra el service worker + toda la Cache Storage
+  // antes de montar la app — así ningún usuario se queda pegado a una
+  // versión vieja sin darse cuenta, cada actualización se autolimpia sola.
+  define: {
+    __BUILD_ID__: JSON.stringify(Date.now().toString()),
+  },
   plugins: [
     react(),
     VitePWA({
