@@ -18,6 +18,7 @@ import {
   listarTrabajadores, crearTrabajador, getBalanceTrabajador,
   getConfiguracionEmpleado, actualizarTarifaInicial,
 } from '../../lib/api/workers.js'
+import { getCicloActivoAPagar } from '../../lib/api/records.js'
 import { generarPinRegistro, listarPinesRegistro, cancelarPinRegistro } from '../../lib/api/auth.js'
 import {
   getConfiguracionTemporal, actualizarTarifaTemporal,
@@ -64,11 +65,18 @@ export default function TrabajadoresPage() {
     setLoading(true); setError(null)
     try {
       const data = await listarTrabajadores({ periodo: filtro, busqueda })
+      // Ciclo A PAGAR (candado global) resuelto UNA sola vez por tipo_pago
+      // — no por trabajador — y reusado en el loop de abajo.
+      const [periodoQ, periodoM] = await Promise.all([
+        getCicloActivoAPagar('quincenal'),
+        getCicloActivoAPagar('mensual'),
+      ])
+      const finPorTipo = { quincenal: periodoQ?.fin, mensual: periodoM?.fin }
       const conBalance = await Promise.all(
         data.map(async (w) => ({
           ...w,
           paymentPeriod: w.payment_period,
-          balance: await getBalanceTrabajador(w.id).catch(() => 0)
+          balance: await getBalanceTrabajador(w.id, finPorTipo[w.payment_period]).catch(() => 0)
         }))
       )
       setTrabajadores(conBalance)

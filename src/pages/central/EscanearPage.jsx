@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, ScanLine, UserCircle, X, Wallet, ArrowLeft, Search } from 'lucide-react'
+import { LogOut, ScanLine, UserCircle, X, Wallet, ArrowLeft, Search, Clock } from 'lucide-react'
 
 import Header        from '../../components/layout/Header.jsx'
 import HorizontalNav from '../../components/layout/HorizontalNav.jsx'
@@ -10,6 +10,7 @@ import Input         from '../../components/ui/Input.jsx'
 import CircleIcon    from '../../components/ui/CircleIcon.jsx'
 import SectionTitle  from '../../components/ui/SectionTitle.jsx'
 import Badge         from '../../components/ui/Badge.jsx'
+import FormJornada   from '../../components/forms/encargado/FormJornada.jsx'
 
 import { useAuthStore } from '../../store/authStore.js'
 import { logout }       from '../../lib/api/auth.js'
@@ -17,9 +18,10 @@ import { getTrabajadorPorId, promoverTipoPagoPendiente } from '../../lib/api/wor
 import {
   registrarAdelanto, getJornadasTrabajadorPorPeriodo,
   getPagoPorPeriodo, getAdelantosPendientes, ejecutarPago,
-  getEmpleadosPendientesDePago,
+  getEmpleadosPendientesDePago, getJornadasTrabajadorHistorico,
+  registrarJornadaEmpleadoCentral, actualizarJornadaTrabajador,
+  getCicloActivoAPagar,
 } from '../../lib/api/records.js'
-import { calcularPeriodoCiclo } from '../../lib/api/ciclos.js'
 import { PAYMENT_PERIOD_LABELS, Direccion } from '../../utils/constants.js'
 
 /**
@@ -29,6 +31,9 @@ import { PAYMENT_PERIOD_LABELS, Direccion } from '../../utils/constants.js'
  *   · Cuadro de info del empleado (nombre, teléfono, tipo de pago) — siempre visible.
  *   · "Dar Adelanto"  → historial de adelantos del ciclo + alta de adelanto.
  *   · "Pagar Empleado" → liquidación del ciclo activo (días, adelantos, total).
+ *   · "Agregar Horas" → crea (o edita) la jornada de HOY de este empleado
+ *     directamente desde Central, sin encargado ni furgoneta de por medio
+ *     (RPC `registrar_jornada_empleado_central`, marca `origen = 'central'`).
  * Cada sub-vista tiene botón para volver al menú o salir a Escanear.
  */
 export default function EscanearPage() {
@@ -37,7 +42,7 @@ export default function EscanearPage() {
 
   const [escaneando, setEscaneando] = useState(false)
   const [trabajador, setTrabajador] = useState(null)
-  const [vista,      setVista]      = useState('menu')   // 'menu' | 'adelanto' | 'pagar'
+  const [vista,      setVista]      = useState('menu')   // 'menu' | 'adelanto' | 'pagar' | 'horas'
   const [error,      setError]      = useState(null)
 
   // Buscador por nombre/teléfono — reemplaza el campo de código manual.
@@ -51,6 +56,10 @@ export default function EscanearPage() {
   const [jornadas,  setJornadas]  = useState([])
   const [adelantos, setAdelantos] = useState([])
   const [esPagado,  setEsPagado]  = useState(false)
+  // Ciclo A PAGAR (candado global, ver getCicloActivoAPagar) — no "el
+  // ciclo de hoy". Requiere una consulta a la BD, así que se resuelve una
+  // vez en cargarTrabajador y se guarda aquí para el resto de la pantalla.
+  const [periodoPago, setPeriodoPago] = useState(null)
 
   useEffect(() => {
     if (rol !== 'admin') navigate(Direccion.centralLogin, { replace: true })
@@ -60,23 +69,20 @@ export default function EscanearPage() {
     setError(null)
     try {
       const t = await getTrabajadorPorId(id.trim())
-      // Único cálculo de ciclo del sistema (ciclos.js) — antes esta pantalla
-      // tenía su propia copia de la regla de corte de días, separada de la
-      // que usan Resumen/Lista de Pago. Si algún día cambian los días de
-      // corte, ahora basta con tocar un solo lugar y los tres flujos de
-      // pago (Escanear, Generar Lista, Resumen) quedan sincronizados solos.
-      const periodo = calcularPeriodoCiclo(t.payment_period)
-      // Arrastre de ciclos cerrados sin pagar (mismo criterio que
-      // getDatosCicloParaPago en la Lista de Pago): sin límite inferior,
-      // trae también días/adelantos de un ciclo anterior que se quedó sin
-      // liquidar a este empleado, para que "Pagar Empleado" también los
-      // cobre — nunca aplica solo al quincenal, sirve para ambos tipos.
-      const [jorn, adel, pago] = await Promise.all([
-        getJornadasTrabajadorPorPeriodo(t.id, null, periodo.fin),
-        getAdelantosPendientes(t.id, null, periodo.fin),
-        getPagoPorPeriodo(t.id, periodo.fin),
-      ])
+      // Ciclo A PAGAR (candado global) — único cálculo compartido con
+      // Lista de Pago/Resumen. null si no hay absolutamente nada pendiente
+      // de ningún ciclo para este tipo_pago.
+      const periodo = await getCicloActivoAPagar(t.payment_period)
+      let jorn = [], adel = [], pago = null
+      if (periodo) {
+        ;[jorn, adel, pago] = await Promise.all([
+          getJornadasTrabajadorPorPeriodo(t.id, null, periodo.fin),
+          getAdelantosPendientes(t.id, null, periodo.fin),
+          getPagoPorPeriodo(t.id, periodo.fin),
+        ])
+      }
       setTrabajador(t)
+      setPeriodoPago(periodo)
       setJornadas(jorn)
       setAdelantos(adel)
       // `pago !== null` ya no basta solo: getPagoPorPeriodo ahora solo
@@ -177,25 +183,24 @@ export default function EscanearPage() {
     cargarPendientes()
   }
 
-  const periodo = trabajador ? calcularPeriodoCiclo(trabajador.payment_period) : null
+  const periodo = periodoPago
   const totalDias = jornadas.reduce((s, j) => s + (j.horas * (trabajador?.tarifa_hora || 0) + Number(j.destajo)), 0)
   const totalAdelantos = adelantos.reduce((s, a) => s + Number(a.monto), 0)
 
-  // Arrastre de ciclo anterior sin pagar (mismo criterio que
-  // getDatosCicloParaPago): fecha más antigua realmente pendiente, o el
-  // inicio oficial del ciclo si no hay arrastre. Es la que hay que pasarle
-  // a ejecutarPago — el RPC solo liquida lo que cae en [p_inicio, p_fin].
+  // Fecha más antigua realmente pendiente — se le pasa a ejecutarPago (el
+  // RPC solo liquida lo que cae en [p_inicio, p_fin]). Como jornadas/
+  // adelantos ya vienen acotados al ciclo a pagar, no hace falta compararlos
+  // contra nada más.
   const periodoInicioReal = (() => {
     if (!periodo) return null
     const fechas = [...jornadas.map((j) => j.fecha), ...adelantos.map((a) => a.fecha)].filter(Boolean)
-    return fechas.length ? [...fechas, periodo.inicio].sort()[0] : periodo.inicio
+    return fechas.length ? fechas.sort()[0] : periodo.inicio
   })()
 
   // Bloqueo de pago anticipado — mismo criterio que Generar Lista
-  // (paymentLists.js): solo se desbloquea si hay arrastre de un bloque ya
-  // cerrado. Si todo lo pendiente es del bloque activo, se espera a que
-  // llegue su día de pago (se desbloquea solo, vía arrastre, ese día).
-  const puedePagar = periodo ? periodoInicioReal < periodo.inicio : false
+  // (paymentLists.js): basta con que haya algo (ya acotado al ciclo a
+  // pagar) para que sea pagable.
+  const puedePagar = periodo ? (jornadas.length > 0 || adelantos.length > 0) : false
 
   return (
     <div className="min-h-screen bg-app-bg">
@@ -321,6 +326,10 @@ export default function EscanearPage() {
                     onClick={() => { setError(null); setVista('pagar') }}>
                     PAGAR EMPLEADO
                   </Button>
+                  <Button variant="outline" icon={<Clock className="w-4 h-4" />}
+                    onClick={() => { setError(null); setVista('horas') }}>
+                    AGREGAR HORAS
+                  </Button>
                   <Button variant="outline" onClick={volverAEscanear}>
                     CANCELAR
                   </Button>
@@ -350,6 +359,15 @@ export default function EscanearPage() {
                 totalAdelantos={totalAdelantos}
                 esPagado={esPagado}
                 onPaid={() => cargarTrabajador(trabajador.id)}
+                onBack={() => setVista('menu')}
+              />
+            )}
+
+            {/* ── AGREGAR HORAS ── */}
+            {vista === 'horas' && (
+              <SeccionAgregarHoras
+                trabajador={trabajador}
+                onSaved={() => cargarTrabajador(trabajador.id)}
                 onBack={() => setVista('menu')}
               />
             )}
@@ -440,10 +458,9 @@ function SeccionPagar({ trabajador, periodo, periodoInicioReal, puedePagar, jorn
     if (!confirm(`¿Confirmar pago de €${totalAPagar.toFixed(2)} a ${trabajador.nombre}?`)) return
     setError(null); setPaying(true)
     try {
-      // periodoInicioReal (no periodo.inicio): si trae días/adelantos
-      // arrastrados de un ciclo anterior sin pagar, el RPC solo los
-      // liquida si p_inicio los cubre — con el inicio "oficial" del ciclo
-      // esos días quedarían cobrados en pantalla pero sin pagar en la BD.
+      // periodo ya ES el ciclo específico a pagar (getCicloActivoAPagar),
+      // nunca "el ciclo de hoy" — periodoInicioReal/periodo.fin liquidan
+      // exactamente ese rango, nada más nuevo.
       await ejecutarPago({
         empleadoId: trabajador.id,
         periodoInicio: periodoInicioReal ?? periodo.inicio,
@@ -512,5 +529,141 @@ function SeccionPagar({ trabajador, periodo, periodoInicioReal, puedePagar, jorn
         </Button>
       </div>
     </Card>
+  )
+}
+
+/* ─── Sub-vista: Agregar horas (jornada de HOY, creada por Central) ───
+ * Al montar, chequea si ya existe una jornada de hoy para este empleado
+ * (liquidada o no) vía getJornadasTrabajadorHistorico(id, hoy, hoy) — mismo
+ * criterio que el guard R-01 del lado del servidor (registrar_jornada_
+ * empleado_central rechaza si ya existe, sin importar fue_liquidado). Así
+ * se evita que el admin llene el formulario y recién al enviar se entere de
+ * que ya había algo — se le muestra el estado correcto de entrada:
+ *   - nada hoy            → formulario de alta (FormJornada)
+ *   - existe, no liquidada → edición libre (mismo mecanismo que Reporte
+ *     Diario / Detalle de Trabajador: actualizarJornadaTrabajador)
+ *   - existe, liquidada    → solo lectura
+ */
+function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
+  const hoy = new Date().toISOString().slice(0, 10)
+
+  const [estado, setEstado] = useState('cargando') // 'cargando' | 'crear' | 'editar' | 'liquidada'
+  const [jornadaHoy, setJornadaHoy] = useState(null)
+  const [error, setError] = useState(null)
+  const [guardando, setGuardando] = useState(false)
+
+  useEffect(() => {
+    let cancelado = false
+    setEstado('cargando'); setError(null)
+    getJornadasTrabajadorHistorico(trabajador.id, hoy, hoy)
+      .then((rows) => {
+        if (cancelado) return
+        const j = rows.find((r) => r.tabla === 'jornada_empleado') ?? null
+        setJornadaHoy(j)
+        setEstado(!j ? 'crear' : j.fue_liquidado ? 'liquidada' : 'editar')
+      })
+      .catch((err) => { if (!cancelado) setError(err.message) })
+    return () => { cancelado = true }
+  }, [trabajador.id, hoy])
+
+  const handleCrear = async (formData) => {
+    setError(null); setGuardando(true)
+    try {
+      await registrarJornadaEmpleadoCentral({
+        empleadoId: trabajador.id,
+        horas:      parseFloat(formData.horas) || 0,
+        destajo:    parseFloat(formData.destajo) || 0,
+      })
+      onSaved()
+      onBack()
+    } catch (err) { setError(err.message) } finally { setGuardando(false) }
+  }
+
+  return (
+    <Card>
+      <SectionTitle color="gold">Agregar horas · Hoy</SectionTitle>
+
+      {estado === 'cargando' && (
+        <p className="text-gray-400 text-xs text-center py-6">Cargando…</p>
+      )}
+
+      {estado === 'liquidada' && (
+        <>
+          <p className="text-gray-500 text-xs text-center py-4">
+            Este empleado ya tiene una jornada de hoy y ya fue liquidada — no se puede crear ni editar.
+          </p>
+          <Button variant="outline" icon={<ArrowLeft className="w-4 h-4" />} onClick={onBack}>
+            VOLVER
+          </Button>
+        </>
+      )}
+
+      {estado === 'editar' && jornadaHoy && (
+        <EditarJornadaHoy
+          jornada={jornadaHoy}
+          onSaved={() => { onSaved(); onBack() }}
+          onCancel={onBack}
+        />
+      )}
+
+      {estado === 'crear' && (
+        <>
+          {error && <p className="text-danger text-xs mb-2">{error}</p>}
+          <FormJornada
+            guardando={guardando}
+            hideFecha
+            onSubmit={handleCrear}
+            onCancel={onBack}
+            submitLabel="REGISTRAR"
+          />
+        </>
+      )}
+    </Card>
+  )
+}
+
+/* Edición libre de la jornada de hoy ya existente — sin el bloqueo de campo
+ * "corregir" de FormJornada (ese candado es para que el encargado en campo
+ * solo complete lo que falta; aquí Central puede ajustar ambos valores
+ * libremente, igual que ya hace en Reporte Diario / Detalle de Trabajador). */
+function EditarJornadaHoy({ jornada, onSaved, onCancel }) {
+  const [horas, setHoras] = useState(String(jornada.horas ?? 0))
+  const [destajo, setDestajo] = useState(String(jornada.destajo ?? 0))
+  const [error, setError] = useState(null)
+  const [guardando, setGuardando] = useState(false)
+
+  const handleGuardar = async () => {
+    const h = parseFloat(horas)
+    const d = parseFloat(destajo)
+    if (Number.isNaN(h) || h < 0 || Number.isNaN(d) || d < 0) {
+      setError('Horas y destajo deben ser números válidos (≥ 0).')
+      return
+    }
+    setError(null); setGuardando(true)
+    try {
+      await actualizarJornadaTrabajador(jornada.id, { horas: h, destajo: d, tabla: 'jornada_empleado' })
+      onSaved()
+    } catch (err) { setError(err.message) } finally { setGuardando(false) }
+  }
+
+  return (
+    <>
+      <p className="text-[10px] text-gold mb-3">
+        Ya existe una jornada de hoy para este empleado — se va a editar, no se va a crear una nueva.
+      </p>
+      {error && <p className="text-danger text-xs mb-2">{error}</p>}
+      <div className="space-y-4">
+        <Input label="Horas trabajadas" type="number" value={horas} onChange={(e) => setHoras(e.target.value)} />
+        <Input label="Destajo (€)" type="number" value={destajo} onChange={(e) => setDestajo(e.target.value)} />
+        <div className="grid grid-cols-2 gap-3">
+          <Button variant="outline" onClick={onCancel} disabled={guardando}>
+            CANCELAR
+          </Button>
+          <Button variant="primary" onClick={handleGuardar} disabled={guardando}>
+            {guardando ? 'GUARDANDO…' : 'GUARDAR'}
+          </Button>
+        </div>
+      </div>
+    </>
   )
 }

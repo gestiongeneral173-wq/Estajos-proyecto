@@ -15,7 +15,7 @@ import { useAuthStore } from '../../store/authStore.js'
 import { logout } from '../../lib/api/auth.js'
 import {
   listarVehiculos, crearVehiculo, rotarPinVehiculo,
-  getTotalAdelantosVehiculoPendientes
+  getTotalAdelantosVehiculoPendientes, getCicloActivoAPagarVehiculo
 } from '../../lib/api/vehicles.js'
 
 //IMPORTACIÓN IMPORTANTE:  Direccion de constants.js : Para el uso de direcciones
@@ -181,10 +181,18 @@ export default function VehiculosPage() {
         return
       }
 
+      // Ciclo A PAGAR (candado global) resuelto UNA sola vez por tipo_pago
+      // — no por vehículo — y reusado en el loop de abajo.
+      const [periodoQ, periodoM] = await Promise.all([
+        getCicloActivoAPagarVehiculo('quincenal'),
+        getCicloActivoAPagarVehiculo('mensual'),
+      ])
+      const finPorTipo = { quincenal: periodoQ?.fin, mensual: periodoM?.fin }
+
       const conAdelantos = await Promise.all(
         data.map(async (v) => {
           try {
-            const totalAdelantos = await getTotalAdelantosVehiculoPendientes(v.id)
+            const totalAdelantos = await getTotalAdelantosVehiculoPendientes(v.id, finPorTipo[v.tipo_pago])
             return { ...v, totalAdelantos }
           } catch (adelantoErr) {
             console.error(`Error cargando adelantos para vehículo ${v.id}:`, adelantoErr)

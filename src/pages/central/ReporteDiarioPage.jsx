@@ -56,13 +56,26 @@ export default function ReporteDiarioPage() {
   const agruparJornadas = (jornadas) => {
     const grupos = {}
     jornadas.forEach(j => {
-      const key = `${j.encargado?.id || 'sin-encargado'}-${j.vehiculo?.id || 'sin-vehiculo'}`
+      // Las jornadas creadas por Central ("Agregar horas") nunca tienen
+      // encargado ni furgoneta — misma combinación (null, null) que podría
+      // darse por coincidencia si un encargado Y una furgoneta fueron dados
+      // de baja el mismo día. Se distinguen con `origen` para no mezclar
+      // ambos casos bajo el mismo grupo visual.
+      const key = j.origen === 'central'
+        ? 'central'
+        : `${j.encargado?.id || 'sin-encargado'}-${j.vehiculo?.id || 'sin-vehiculo'}`
       if (!grupos[key]) {
-        grupos[key] = {
-          encargado: j.encargado ?? { id: null, nombre: 'Encargado despedido' },
-          vehiculo: j.vehiculo ?? { id: null, nombre: 'Vehículo dado de baja' },
-          empleados: []
-        }
+        grupos[key] = j.origen === 'central'
+          ? {
+              encargado: { id: null, nombre: 'Registrado por Central' },
+              vehiculo: null,
+              empleados: []
+            }
+          : {
+              encargado: j.encargado ?? { id: null, nombre: 'Encargado despedido' },
+              vehiculo: j.vehiculo ?? { id: null, nombre: 'Vehículo dado de baja' },
+              empleados: []
+            }
       }
       grupos[key].empleados.push({
         id: j.id, empleado: j.empleado, horas: j.horas, destajo: j.destajo,
