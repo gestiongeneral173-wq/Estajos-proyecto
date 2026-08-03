@@ -67,7 +67,16 @@ export default function Header({
   }
 
   return (
-    <header className="bg-navy-dark px-4 py-3 flex items-center justify-between sticky top-0 z-40">
+    <header
+      className="bg-navy-dark px-4 pb-4 flex items-center justify-between sticky top-0 z-40"
+      // Más grueso (antes py-3) para que el logo/botones no queden pegados
+      // al borde superior. El padding-top suma env(safe-area-inset-top): en
+      // desktop/navegador normal esa variable vale 0 (queda igual que
+      // pb-4), pero en un PWA instalado en celular con notch/status bar
+      // (viewport-fit=cover, ver index.html) evita que el header quede
+      // debajo de la barra de notificaciones del sistema.
+      style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}
+    >
       {/* Logo */}
       <div className="flex items-center gap-2">
         <Truck className="w-6 h-6 text-gold" />
