@@ -543,10 +543,12 @@ function SeccionPagar({ trabajador, periodo, periodoInicioReal, puedePagar, jorn
  * rechaza si ya existe, sin importar fue_liquidado). Así se evita que el
  * admin llene el formulario y recién al enviar se entere de que ya había
  * algo — se le muestra el estado correcto de entrada:
- *   - nada esa fecha       → formulario de alta (FormJornada)
- *   - existe, no liquidada → edición libre (mismo mecanismo que Reporte
- *     Diario / Detalle de Trabajador: actualizarJornadaTrabajador)
- *   - existe, liquidada    → solo lectura
+ *   - nada esa fecha           → formulario de alta (FormJornada)
+ *   - existe, falta un campo   → completar solo lo que falta (mismo criterio
+ *     que el modo "corregir" del encargado: el campo con valor > 0 se
+ *     bloquea/gris, solo el campo en 0 queda editable)
+ *   - existe, ambos campos ya llenos → solo lectura ("completa")
+ *   - existe, liquidada         → solo lectura
  *
  * Al ser Central (sin tokenTurno/encargado/furgoneta de por medio), estas
  * altas retroactivas no tienen la verificación de campo que sí tiene un
@@ -561,7 +563,7 @@ function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
   const hoy = new Date().toISOString().slice(0, 10)
 
   const [fecha, setFecha] = useState(hoy)
-  const [estado, setEstado] = useState('cargando') // 'cargando' | 'crear' | 'editar' | 'liquidada'
+  const [estado, setEstado] = useState('cargando') // 'cargando' | 'crear' | 'editar' | 'completa' | 'liquidada'
   const [jornadaFecha, setJornadaFecha] = useState(null)
   const [error, setError] = useState(null)
   const [guardando, setGuardando] = useState(false)
@@ -574,7 +576,12 @@ function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
         if (cancelado) return
         const j = rows.find((r) => r.tabla === 'jornada_empleado') ?? null
         setJornadaFecha(j)
-        setEstado(!j ? 'crear' : j.fue_liquidado ? 'liquidada' : 'editar')
+        setEstado(
+          !j ? 'crear'
+            : j.fue_liquidado ? 'liquidada'
+            : (Number(j.horas) > 0 && Number(j.destajo) > 0) ? 'completa'
+            : 'editar'
+        )
       })
       .catch((err) => { if (!cancelado) setError(err.message) })
     return () => { cancelado = true }
@@ -630,6 +637,25 @@ function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
         </>
       )}
 
+      {estado === 'completa' && jornadaFecha && (
+        <>
+          <p className="text-gray-500 text-xs text-center py-2">
+            Esta jornada ya tiene horas y destajo registrados — no queda nada por completar.
+          </p>
+          <div className="space-y-2 my-3 px-1">
+            <p className="text-sm text-navy-dark">
+              Horas trabajadas: <strong>{jornadaFecha.horas}</strong>
+            </p>
+            <p className="text-sm text-navy-dark">
+              Destajo: <strong>€{Number(jornadaFecha.destajo).toFixed(2)}</strong>
+            </p>
+          </div>
+          <Button variant="outline" icon={<ArrowLeft className="w-4 h-4" />} onClick={onBack}>
+            VOLVER
+          </Button>
+        </>
+      )}
+
       {estado === 'editar' && jornadaFecha && (
         <EditarJornadaHoy
           jornada={jornadaFecha}
@@ -656,12 +682,15 @@ function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
   )
 }
 
-/* Edición libre de la jornada ya existente en la fecha elegida — sin el
- * bloqueo de campo "corregir" de FormJornada (ese candado es para que el
- * encargado en campo solo complete lo que falta; aquí Central puede
- * ajustar ambos valores libremente, igual que ya hace en Reporte Diario /
- * Detalle de Trabajador). */
+/* Completar la jornada ya existente en la fecha elegida — mismo criterio
+ * que el modo "corregir" del encargado (FormJornada con valoresIniciales):
+ * el campo que ya tenga valor > 0 se bloquea/gris, solo el campo en 0 queda
+ * editable. El caso de ambos campos ya llenos no llega aquí — lo cubre el
+ * estado "completa" de SeccionAgregarHoras, de solo lectura. */
 function EditarJornadaHoy({ jornada, fecha, hoy, onSaved, onCancel }) {
+  const horasLlenas  = Number(jornada.horas) > 0
+  const destajoLleno = Number(jornada.destajo) > 0
+
   const [horas, setHoras] = useState(String(jornada.horas ?? 0))
   const [destajo, setDestajo] = useState(String(jornada.destajo ?? 0))
   const [error, setError] = useState(null)
@@ -687,18 +716,40 @@ function EditarJornadaHoy({ jornada, fecha, hoy, onSaved, onCancel }) {
   return (
     <>
       <p className="text-[10px] text-gold mb-3">
-        Ya existe una jornada en esta fecha para este empleado — se va a editar, no se va a crear una nueva.
+        Esta jornada ya tiene un campo registrado — completa solo lo que falta.
       </p>
       {error && <p className="text-danger text-xs mb-2">{error}</p>}
       <div className="space-y-4">
-        <Input label="Horas trabajadas" type="number" value={horas} onChange={(e) => setHoras(e.target.value)} />
-        <Input label="Destajo (€)" type="number" value={destajo} onChange={(e) => setDestajo(e.target.value)} />
+        <div>
+          <Input
+            label="Horas trabajadas"
+            type="number"
+            value={horas}
+            disabled={horasLlenas}
+            onChange={(e) => setHoras(e.target.value)}
+          />
+          <p className={`mt-1 text-[10px] font-semibold ${horasLlenas ? 'text-primary' : 'text-gold'}`}>
+            {horasLlenas ? '✓ Ya registrado' : 'Falta completar'}
+          </p>
+        </div>
+        <div>
+          <Input
+            label="Destajo (€)"
+            type="number"
+            value={destajo}
+            disabled={destajoLleno}
+            onChange={(e) => setDestajo(e.target.value)}
+          />
+          <p className={`mt-1 text-[10px] font-semibold ${destajoLleno ? 'text-primary' : 'text-gold'}`}>
+            {destajoLleno ? '✓ Ya registrado' : 'Falta completar'}
+          </p>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <Button variant="outline" onClick={onCancel} disabled={guardando}>
             CANCELAR
           </Button>
           <Button variant="primary" onClick={handleGuardar} disabled={guardando}>
-            {guardando ? 'GUARDANDO…' : 'GUARDAR'}
+            {guardando ? 'GUARDANDO…' : 'COMPLETAR'}
           </Button>
         </div>
       </div>

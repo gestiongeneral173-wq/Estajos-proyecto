@@ -639,7 +639,10 @@ export async function getJornadasTrabajadorHistorico(empleadoId, fechaInicio, fe
   ])
   if (emp.error) throw new Error(emp.error.message)
   if (enc.error) throw new Error(enc.error.message)
-  return [...(emp.data ?? []), ...(enc.data ?? [])].map(mapJornada)
+  return [
+    ...(emp.data ?? []).map((r) => ({ ...r, tabla: 'jornada_empleado' })),
+    ...(enc.data ?? []).map((r) => ({ ...r, tabla: 'jornada_encargado' })),
+  ].map(mapJornada)
 }
 
 // Solo se filtra por `fecha_cierre_ciclo` (el fin de ciclo activo es
