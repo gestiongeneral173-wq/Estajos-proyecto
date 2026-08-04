@@ -12,7 +12,7 @@ import Modal         from '../../components/ui/Modal.jsx'
 
 import { useAuthStore } from '../../store/authStore.js'
 import { logout } from '../../lib/api/auth.js'
-import { getJornadasDelDia, reabrirJornadaFurgonetaDia, actualizarJornadaTrabajador } from '../../lib/api/records.js'
+import { getJornadasDelDia, reabrirJornadaFurgonetaDia, eliminarJornadasCentralDia, actualizarJornadaTrabajador } from '../../lib/api/records.js'
 import { useRealtime } from '../../hooks/useRealtime.js'
 
 //IMPORTACIÓN IMPORTANTE:  Direccion de constants.js : Para el uso de direcciones
@@ -35,7 +35,12 @@ export default function ReporteDiarioPage() {
   // tocado ese mismo día, pero sí lo obliga a re-declarar sus horas del
   // día completo al volver a cerrarlo. Solo disponible para el día de
   // hoy — la RPC también lo exige del lado del servidor.
-  const [grupoABorrar, setGrupoABorrar] = useState(null) // { encargado, vehiculo, empleados }
+  //
+  // El mismo modal también cubre "eliminar fila de Central" (esCentral):
+  // ahí no hay furgoneta ni encargado que reabrir, así que es un borrado
+  // directo de esas jornada_empleado — disponible para cualquier fecha,
+  // ya que "Agregar Horas" permite altas retroactivas.
+  const [grupoABorrar, setGrupoABorrar] = useState(null) // { encargado, vehiculo, empleados, esCentral }
   const [borrando, setBorrando]         = useState(false)
   const [borrarError, setBorrarError]   = useState(null)
 
@@ -69,12 +74,14 @@ export default function ReporteDiarioPage() {
           ? {
               encargado: { id: null, nombre: 'Registrado por Central' },
               vehiculo: null,
-              empleados: []
+              empleados: [],
+              esCentral: true,
             }
           : {
               encargado: j.encargado ?? { id: null, nombre: 'Encargado despedido' },
               vehiculo: j.vehiculo ?? { id: null, nombre: 'Vehículo dado de baja' },
-              empleados: []
+              empleados: [],
+              esCentral: false,
             }
       }
       grupos[key].empleados.push({
@@ -129,11 +136,15 @@ export default function ReporteDiarioPage() {
     if (!grupoABorrar) return
     setBorrando(true); setBorrarError(null)
     try {
-      await reabrirJornadaFurgonetaDia({
-        encargadoId: grupoABorrar.encargado.id,
-        furgonetaId: grupoABorrar.vehiculo.id,
-        fecha,
-      })
+      if (grupoABorrar.esCentral) {
+        await eliminarJornadasCentralDia(fecha)
+      } else {
+        await reabrirJornadaFurgonetaDia({
+          encargadoId: grupoABorrar.encargado.id,
+          furgonetaId: grupoABorrar.vehiculo.id,
+          fecha,
+        })
+      }
       setGrupoABorrar(null)
       await cargar()
     } catch (err) {
@@ -175,14 +186,17 @@ export default function ReporteDiarioPage() {
                     <p className="font-semibold text-sm">Encargado: {grupo.encargado?.nombre ?? '—'}</p>
                     <p className="text-xs text-gray-300">Vehículo: {grupo.vehiculo?.nombre ?? '—'}</p>
                   </div>
-                  {/* Solo si el encargado y el vehículo siguen activos (no
-                      dados de baja) y la fecha vista es hoy — mismo
-                      requisito que valida la RPC del lado del servidor. */}
-                  {grupo.encargado?.id && grupo.vehiculo?.id && fecha === hoy() && (
+                  {/* Furgonetas: solo si el encargado y el vehículo siguen
+                      activos (no dados de baja) y la fecha vista es hoy —
+                      mismo requisito que valida la RPC del lado del
+                      servidor. Central: cualquier fecha, ya que "Agregar
+                      Horas" permite altas retroactivas y esta es la única
+                      forma de corregir una fila mal creada en el pasado. */}
+                  {(grupo.esCentral || (grupo.encargado?.id && grupo.vehiculo?.id && fecha === hoy())) && (
                     <button
                       onClick={() => { setBorrarError(null); setGrupoABorrar(grupo) }}
                       className="text-gray-300 hover:text-danger active:scale-90 transition-transform duration-160 shrink-0"
-                      title="Rehacer registro de esta furgoneta"
+                      title={grupo.esCentral ? 'Eliminar registros de Central de este día' : 'Rehacer registro de esta furgoneta'}
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -269,27 +283,42 @@ export default function ReporteDiarioPage() {
         </div>
       </div>
 
-      {/* ── Confirmar "rehacer" una furgoneta: borra sus jornada_empleado
-          y su jornada_furgoneta de hoy. No toca la jornada propia del
-          encargado ni a los temporales que registró esa furgoneta. ── */}
+      {/* ── Confirmar "rehacer" una furgoneta (borra jornada_empleado +
+          jornada_furgoneta de hoy, sin tocar temporales) o "eliminar fila
+          de Central" (borrado directo de jornada_empleado origen='central'
+          de la fecha vista, cualquier día). ── */}
       <Modal
         open={!!grupoABorrar}
-        title="Rehacer registro de furgoneta"
+        title={grupoABorrar?.esCentral ? 'Eliminar registros de Central' : 'Rehacer registro de furgoneta'}
         onClose={() => { if (!borrando) setGrupoABorrar(null) }}
       >
         {grupoABorrar && (
           <>
-            <p className="text-sm text-navy-dark mb-2">
-              Se eliminarán <strong>{grupoABorrar.empleados.length}</strong> registro(s) de
-              empleado y el registro de la furgoneta{' '}
-              <strong>{grupoABorrar.vehiculo?.nombre ?? '—'}</strong> para{' '}
-              <strong>{grupoABorrar.encargado?.nombre ?? '—'}</strong> hoy.
-            </p>
+            {grupoABorrar.esCentral ? (
+              <p className="text-sm text-navy-dark mb-2">
+                Se eliminarán <strong>{grupoABorrar.empleados.length}</strong> registro(s)
+                creados desde Central ("Agregar Horas") para el{' '}
+                <strong>{fecha}</strong>.
+              </p>
+            ) : (
+              <p className="text-sm text-navy-dark mb-2">
+                Se eliminarán <strong>{grupoABorrar.empleados.length}</strong> registro(s) de
+                empleado y el registro de la furgoneta{' '}
+                <strong>{grupoABorrar.vehiculo?.nombre ?? '—'}</strong> para{' '}
+                <strong>{grupoABorrar.encargado?.nombre ?? '—'}</strong> hoy.
+              </p>
+            )}
             <p className="text-xs text-gray-500 mb-4">
-              El encargado podrá volver a entrar con el PIN de esta furgoneta y rehacer el
-              registro desde cero. <strong>También se reinicia su jornada del día completo</strong> —
-              si ya tiene horas/destajo propios registrados hoy, tendrá que volver a declararlos.
-              Esta acción no se puede deshacer.
+              {grupoABorrar.esCentral ? (
+                <>Se rechaza si alguno de estos registros ya fue liquidado (pagado). Esta acción no se puede deshacer.</>
+              ) : (
+                <>
+                  El encargado podrá volver a entrar con el PIN de esta furgoneta y rehacer el
+                  registro desde cero. <strong>También se reinicia su jornada del día completo</strong> —
+                  si ya tiene horas/destajo propios registrados hoy, tendrá que volver a declararlos.
+                  Esta acción no se puede deshacer.
+                </>
+              )}
             </p>
             {borrarError && <p className="text-danger text-xs mb-3">{borrarError}</p>}
             <div className="grid grid-cols-2 gap-3">

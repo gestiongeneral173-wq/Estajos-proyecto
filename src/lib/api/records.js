@@ -847,3 +847,20 @@ export async function reabrirJornadaFurgonetaDia({ encargadoId, furgonetaId, fec
   if (error) throw new Error(error.message)
   return data   // { empleados_eliminados }
 }
+
+/* ─── Eliminar la fila "Registrado por Central" de un día (Reporte Diario) ──
+ * A diferencia de reabrirJornadaFurgonetaDia, un registro origen='central'
+ * no tiene furgoneta ni sesión de encargado que reabrir — es un borrado
+ * directo de esas jornada_empleado. Disponible para cualquier fecha (no
+ * solo hoy), porque "Agregar Horas" en Central permite altas retroactivas
+ * y esta es la única forma de corregir una fila mal creada en el pasado.
+ * La RPC rechaza TODO el borrado si alguna jornada de ese grupo ya fue
+ * liquidada (todo o nada, mismo criterio que reabrir_jornada_furgoneta_dia).
+ */
+export async function eliminarJornadasCentralDia(fecha) {
+  const { data, error } = await supabase.rpc('eliminar_jornadas_central_dia', {
+    p_fecha: fecha,
+  })
+  if (error) throw new Error(error.message)
+  return data   // cantidad eliminada
+}
