@@ -32,8 +32,8 @@ export default function FormTrabajador({
   // `values.nombre`, que es lo único que conoce el resto del sistema.
   const [nombre,   setNombre]   = useState('')
   const [apellido, setApellido] = useState('')
-  const nombreValido   = NOMBRE_RE.test(nombre.trim())   && nombre.trim().length >= 4
-  const apellidoValido = NOMBRE_RE.test(apellido.trim()) && apellido.trim().length >= 4
+  const nombreValido   = NOMBRE_RE.test(nombre.trim())
+  const apellidoValido = NOMBRE_RE.test(apellido.trim())
   const telefonoValido = values.telefono?.length >= 9 && values.telefono?.length <= 15
   const tarifaValida   = parseFloat(values.tarifa_hora) > 0
 
@@ -62,7 +62,7 @@ export default function FormTrabajador({
             onChange={(e) => { setNombre(e.target.value); actualizarNombreCompleto(e.target.value, apellido) }}
           />
           {nombre && !nombreValido && (
-            <p className="text-danger text-[11px] -mt-2">Solo letras, mínimo 4.</p>
+            <p className="text-danger text-[11px] -mt-2">Solo letras.</p>
           )}
           <Input
             label="Apellido"
@@ -71,7 +71,7 @@ export default function FormTrabajador({
             onChange={(e) => { setApellido(e.target.value); actualizarNombreCompleto(nombre, e.target.value) }}
           />
           {apellido && !apellidoValido && (
-            <p className="text-danger text-[11px] -mt-2">Solo letras, mínimo 4.</p>
+            <p className="text-danger text-[11px] -mt-2">Solo letras.</p>
           )}
         </>
       )}
