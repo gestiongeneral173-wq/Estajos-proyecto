@@ -33,8 +33,8 @@ export default function FormRegistroConPin() {
   const [error,     setError]    = useState(null)
   const [loading,   setLoading]  = useState(false)
 
-  const nombreValido   = NOMBRE_RE.test(nombre.trim())   && nombre.trim().length >= 4
-  const apellidoValido = NOMBRE_RE.test(apellido.trim()) && apellido.trim().length >= 4
+  const nombreValido   = NOMBRE_RE.test(nombre.trim())
+  const apellidoValido = NOMBRE_RE.test(apellido.trim())
   const telefonoValido = telefono.length >= 9 && telefono.length <= 15
 
   const handleValidar = async (e) => {
@@ -114,7 +114,7 @@ export default function FormRegistroConPin() {
             required
           />
           {nombre && !nombreValido && (
-            <p className="text-danger text-[11px] -mt-2">Solo letras, mínimo 4.</p>
+            <p className="text-danger text-[11px] -mt-2">Solo letras.</p>
           )}
           <Input
             label="Apellido"
@@ -124,7 +124,7 @@ export default function FormRegistroConPin() {
             required
           />
           {apellido && !apellidoValido && (
-            <p className="text-danger text-[11px] -mt-2">Solo letras, mínimo 4.</p>
+            <p className="text-danger text-[11px] -mt-2">Solo letras.</p>
           )}
           <Input
             label="Teléfono"

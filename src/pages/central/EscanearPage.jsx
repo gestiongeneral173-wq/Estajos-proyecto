@@ -31,9 +31,10 @@ import { PAYMENT_PERIOD_LABELS, Direccion } from '../../utils/constants.js'
  *   · Cuadro de info del empleado (nombre, teléfono, tipo de pago) — siempre visible.
  *   · "Dar Adelanto"  → historial de adelantos del ciclo + alta de adelanto.
  *   · "Pagar Empleado" → liquidación del ciclo activo (días, adelantos, total).
- *   · "Agregar Horas" → crea (o edita) la jornada de HOY de este empleado
- *     directamente desde Central, sin encargado ni furgoneta de por medio
- *     (RPC `registrar_jornada_empleado_central`, marca `origen = 'central'`).
+ *   · "Agregar Horas" → crea (o edita) la jornada de la fecha elegida (hoy
+ *     u otra pasada) de este empleado directamente desde Central, sin
+ *     encargado ni furgoneta de por medio (RPC
+ *     `registrar_jornada_empleado_central`, marca `origen = 'central'`).
  * Cada sub-vista tiene botón para volver al menú o salir a Escanear.
  */
 export default function EscanearPage() {
@@ -532,47 +533,71 @@ function SeccionPagar({ trabajador, periodo, periodoInicioReal, puedePagar, jorn
   )
 }
 
-/* ─── Sub-vista: Agregar horas (jornada de HOY, creada por Central) ───
- * Al montar, chequea si ya existe una jornada de hoy para este empleado
- * (liquidada o no) vía getJornadasTrabajadorHistorico(id, hoy, hoy) — mismo
- * criterio que el guard R-01 del lado del servidor (registrar_jornada_
- * empleado_central rechaza si ya existe, sin importar fue_liquidado). Así
- * se evita que el admin llene el formulario y recién al enviar se entere de
- * que ya había algo — se le muestra el estado correcto de entrada:
- *   - nada hoy            → formulario de alta (FormJornada)
- *   - existe, no liquidada → edición libre (mismo mecanismo que Reporte
- *     Diario / Detalle de Trabajador: actualizarJornadaTrabajador)
- *   - existe, liquidada    → solo lectura
+/* ─── Sub-vista: Agregar horas (creada por Central, cualquier fecha) ───
+ * Calendario propio (default hoy, sin fechas futuras) — igual que el de
+ * "Búsqueda de jornada" del encargado, permite completar días pasados que
+ * nadie fichó en campo. Al elegir empleado + fecha, chequea si ya existe
+ * una jornada de esa fecha para este empleado (liquidada o no) vía
+ * getJornadasTrabajadorHistorico(id, fecha, fecha) — mismo criterio que el
+ * guard R-01 del lado del servidor (registrar_jornada_empleado_central
+ * rechaza si ya existe, sin importar fue_liquidado). Así se evita que el
+ * admin llene el formulario y recién al enviar se entere de que ya había
+ * algo — se le muestra el estado correcto de entrada:
+ *   - nada esa fecha           → formulario de alta (FormJornada)
+ *   - existe, falta un campo   → completar solo lo que falta (mismo criterio
+ *     que el modo "corregir" del encargado: el campo con valor > 0 se
+ *     bloquea/gris, solo el campo en 0 queda editable)
+ *   - existe, ambos campos ya llenos → solo lectura ("completa")
+ *   - existe, liquidada         → solo lectura
+ *
+ * Al ser Central (sin tokenTurno/encargado/furgoneta de por medio), estas
+ * altas retroactivas no tienen la verificación de campo que sí tiene un
+ * encargado presente físicamente — por eso, si la fecha no es hoy, se pide
+ * una confirmación explícita antes de guardar. La trazabilidad ya existe
+ * sola: origen='central' agrupa estos registros aparte en Reporte Diario
+ * ("Registrado por Central"), distinguibles de cualquier alta de campo. El
+ * servidor además rechaza fechas de más de 30 días atrás (mismo límite que
+ * registrar_jornada_empleado).
  */
 function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
   const hoy = new Date().toISOString().slice(0, 10)
 
-  const [estado, setEstado] = useState('cargando') // 'cargando' | 'crear' | 'editar' | 'liquidada'
-  const [jornadaHoy, setJornadaHoy] = useState(null)
+  const [fecha, setFecha] = useState(hoy)
+  const [estado, setEstado] = useState('cargando') // 'cargando' | 'crear' | 'editar' | 'completa' | 'liquidada'
+  const [jornadaFecha, setJornadaFecha] = useState(null)
   const [error, setError] = useState(null)
   const [guardando, setGuardando] = useState(false)
 
   useEffect(() => {
     let cancelado = false
     setEstado('cargando'); setError(null)
-    getJornadasTrabajadorHistorico(trabajador.id, hoy, hoy)
+    getJornadasTrabajadorHistorico(trabajador.id, fecha, fecha)
       .then((rows) => {
         if (cancelado) return
         const j = rows.find((r) => r.tabla === 'jornada_empleado') ?? null
-        setJornadaHoy(j)
-        setEstado(!j ? 'crear' : j.fue_liquidado ? 'liquidada' : 'editar')
+        setJornadaFecha(j)
+        setEstado(
+          !j ? 'crear'
+            : j.fue_liquidado ? 'liquidada'
+            : (Number(j.horas) > 0 && Number(j.destajo) > 0) ? 'completa'
+            : 'editar'
+        )
       })
       .catch((err) => { if (!cancelado) setError(err.message) })
     return () => { cancelado = true }
-  }, [trabajador.id, hoy])
+  }, [trabajador.id, fecha])
 
   const handleCrear = async (formData) => {
+    if (fecha !== hoy && !confirm(
+      `Vas a registrar una jornada retroactiva del ${fecha} para ${trabajador.nombre}, sin verificación de campo. ¿Confirmar?`
+    )) return
     setError(null); setGuardando(true)
     try {
       await registrarJornadaEmpleadoCentral({
         empleadoId: trabajador.id,
         horas:      parseFloat(formData.horas) || 0,
         destajo:    parseFloat(formData.destajo) || 0,
+        fecha,
       })
       onSaved()
       onBack()
@@ -581,7 +606,21 @@ function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
 
   return (
     <Card>
-      <SectionTitle color="gold">Agregar horas · Hoy</SectionTitle>
+      <SectionTitle color="gold">Agregar horas</SectionTitle>
+
+      <Input
+        label="Fecha de la jornada"
+        type="date"
+        max={hoy}
+        value={fecha}
+        onChange={(e) => setFecha(e.target.value)}
+        className="mb-4"
+      />
+      {fecha !== hoy && (
+        <p className="text-[10px] text-gold mb-3">
+          Fecha pasada — esta alta no tiene verificación de campo, confírmala solo si estás seguro de que el empleado trabajó ese día.
+        </p>
+      )}
 
       {estado === 'cargando' && (
         <p className="text-gray-400 text-xs text-center py-6">Cargando…</p>
@@ -590,7 +629,7 @@ function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
       {estado === 'liquidada' && (
         <>
           <p className="text-gray-500 text-xs text-center py-4">
-            Este empleado ya tiene una jornada de hoy y ya fue liquidada — no se puede crear ni editar.
+            Este empleado ya tiene una jornada en esta fecha y ya fue liquidada — no se puede crear ni editar.
           </p>
           <Button variant="outline" icon={<ArrowLeft className="w-4 h-4" />} onClick={onBack}>
             VOLVER
@@ -598,9 +637,30 @@ function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
         </>
       )}
 
-      {estado === 'editar' && jornadaHoy && (
+      {estado === 'completa' && jornadaFecha && (
+        <>
+          <p className="text-gray-500 text-xs text-center py-2">
+            Esta jornada ya tiene horas y destajo registrados — no queda nada por completar.
+          </p>
+          <div className="space-y-2 my-3 px-1">
+            <p className="text-sm text-navy-dark">
+              Horas trabajadas: <strong>{jornadaFecha.horas}</strong>
+            </p>
+            <p className="text-sm text-navy-dark">
+              Destajo: <strong>€{Number(jornadaFecha.destajo).toFixed(2)}</strong>
+            </p>
+          </div>
+          <Button variant="outline" icon={<ArrowLeft className="w-4 h-4" />} onClick={onBack}>
+            VOLVER
+          </Button>
+        </>
+      )}
+
+      {estado === 'editar' && jornadaFecha && (
         <EditarJornadaHoy
-          jornada={jornadaHoy}
+          jornada={jornadaFecha}
+          fecha={fecha}
+          hoy={hoy}
           onSaved={() => { onSaved(); onBack() }}
           onCancel={onBack}
         />
@@ -622,11 +682,15 @@ function SeccionAgregarHoras({ trabajador, onSaved, onBack }) {
   )
 }
 
-/* Edición libre de la jornada de hoy ya existente — sin el bloqueo de campo
- * "corregir" de FormJornada (ese candado es para que el encargado en campo
- * solo complete lo que falta; aquí Central puede ajustar ambos valores
- * libremente, igual que ya hace en Reporte Diario / Detalle de Trabajador). */
-function EditarJornadaHoy({ jornada, onSaved, onCancel }) {
+/* Completar la jornada ya existente en la fecha elegida — mismo criterio
+ * que el modo "corregir" del encargado (FormJornada con valoresIniciales):
+ * el campo que ya tenga valor > 0 se bloquea/gris, solo el campo en 0 queda
+ * editable. El caso de ambos campos ya llenos no llega aquí — lo cubre el
+ * estado "completa" de SeccionAgregarHoras, de solo lectura. */
+function EditarJornadaHoy({ jornada, fecha, hoy, onSaved, onCancel }) {
+  const horasLlenas  = Number(jornada.horas) > 0
+  const destajoLleno = Number(jornada.destajo) > 0
+
   const [horas, setHoras] = useState(String(jornada.horas ?? 0))
   const [destajo, setDestajo] = useState(String(jornada.destajo ?? 0))
   const [error, setError] = useState(null)
@@ -639,6 +703,9 @@ function EditarJornadaHoy({ jornada, onSaved, onCancel }) {
       setError('Horas y destajo deben ser números válidos (≥ 0).')
       return
     }
+    if (fecha !== hoy && !confirm(
+      `Vas a editar una jornada retroactiva del ${fecha}. ¿Confirmar?`
+    )) return
     setError(null); setGuardando(true)
     try {
       await actualizarJornadaTrabajador(jornada.id, { horas: h, destajo: d, tabla: 'jornada_empleado' })
@@ -649,18 +716,40 @@ function EditarJornadaHoy({ jornada, onSaved, onCancel }) {
   return (
     <>
       <p className="text-[10px] text-gold mb-3">
-        Ya existe una jornada de hoy para este empleado — se va a editar, no se va a crear una nueva.
+        Esta jornada ya tiene un campo registrado — completa solo lo que falta.
       </p>
       {error && <p className="text-danger text-xs mb-2">{error}</p>}
       <div className="space-y-4">
-        <Input label="Horas trabajadas" type="number" value={horas} onChange={(e) => setHoras(e.target.value)} />
-        <Input label="Destajo (€)" type="number" value={destajo} onChange={(e) => setDestajo(e.target.value)} />
+        <div>
+          <Input
+            label="Horas trabajadas"
+            type="number"
+            value={horas}
+            disabled={horasLlenas}
+            onChange={(e) => setHoras(e.target.value)}
+          />
+          <p className={`mt-1 text-[10px] font-semibold ${horasLlenas ? 'text-primary' : 'text-gold'}`}>
+            {horasLlenas ? '✓ Ya registrado' : 'Falta completar'}
+          </p>
+        </div>
+        <div>
+          <Input
+            label="Destajo (€)"
+            type="number"
+            value={destajo}
+            disabled={destajoLleno}
+            onChange={(e) => setDestajo(e.target.value)}
+          />
+          <p className={`mt-1 text-[10px] font-semibold ${destajoLleno ? 'text-primary' : 'text-gold'}`}>
+            {destajoLleno ? '✓ Ya registrado' : 'Falta completar'}
+          </p>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <Button variant="outline" onClick={onCancel} disabled={guardando}>
             CANCELAR
           </Button>
           <Button variant="primary" onClick={handleGuardar} disabled={guardando}>
-            {guardando ? 'GUARDANDO…' : 'GUARDAR'}
+            {guardando ? 'GUARDANDO…' : 'COMPLETAR'}
           </Button>
         </div>
       </div>

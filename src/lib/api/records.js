@@ -206,19 +206,22 @@ export async function registrarJornadaEmpleado({ tokenTurno, empleadoId, encarga
   return data   // uuid
 }
 
-// "Agregar horas" desde Central (EscanearPage): crea una jornada de HOY
-// para un empleado sin pasar por el flujo de campo — sin tokenTurno, sin
-// encargado ni furgoneta (la RPC las deja en NULL, marcando
-// `origen = 'central'`). Exclusiva de admin (verificado del lado del
-// servidor). Replica el mismo guard que `registrar_jornada_empleado`: si ya
-// existe una jornada de hoy para este empleado (liquidada o no), la RPC
-// rechaza — la UI debe chequear eso antes con `getJornadasTrabajadorHistorico`
-// y ofrecer editar en vez de crear.
-export async function registrarJornadaEmpleadoCentral({ empleadoId, horas, destajo = 0 }) {
+// "Agregar horas" desde Central (EscanearPage): crea una jornada para un
+// empleado sin pasar por el flujo de campo — sin tokenTurno, sin encargado
+// ni furgoneta (la RPC las deja en NULL, marcando `origen = 'central'`).
+// Exclusiva de admin (verificado del lado del servidor). `fecha` es la
+// fecha elegida en el calendario de esta pantalla (YYYY-MM-DD); si no se
+// manda, la RPC usa CURRENT_DATE por default (igual que
+// registrar_jornada_empleado). Replica el mismo guard que
+// `registrar_jornada_empleado`: si ya existe una jornada de esa fecha para
+// este empleado (liquidada o no), la RPC rechaza — la UI debe chequear eso
+// antes con `getJornadasTrabajadorHistorico` y ofrecer editar en vez de crear.
+export async function registrarJornadaEmpleadoCentral({ empleadoId, horas, destajo = 0, fecha }) {
   const { data, error } = await supabase.rpc('registrar_jornada_empleado_central', {
     p_empleado_id: empleadoId,
     p_horas:       horas,
     p_destajo:     destajo,
+    ...(fecha ? { p_fecha: fecha } : {}),
   })
   if (error) throw new Error(error.message)
   return data   // uuid
@@ -636,7 +639,10 @@ export async function getJornadasTrabajadorHistorico(empleadoId, fechaInicio, fe
   ])
   if (emp.error) throw new Error(emp.error.message)
   if (enc.error) throw new Error(enc.error.message)
-  return [...(emp.data ?? []), ...(enc.data ?? [])].map(mapJornada)
+  return [
+    ...(emp.data ?? []).map((r) => ({ ...r, tabla: 'jornada_empleado' })),
+    ...(enc.data ?? []).map((r) => ({ ...r, tabla: 'jornada_encargado' })),
+  ].map(mapJornada)
 }
 
 // Solo se filtra por `fecha_cierre_ciclo` (el fin de ciclo activo es

@@ -29,11 +29,21 @@ export default function FormTrabajador({
 }) {
   // Nombre y apellido se piden por separado (para que no se pueda saltar o
   // meter cualquier cosa en un solo campo libre) pero se juntan en
-  // `values.nombre`, que es lo único que conoce el resto del sistema.
-  const [nombre,   setNombre]   = useState('')
-  const [apellido, setApellido] = useState('')
-  const nombreValido   = NOMBRE_RE.test(nombre.trim())   && nombre.trim().length >= 4
-  const apellidoValido = NOMBRE_RE.test(apellido.trim()) && apellido.trim().length >= 4
+  // `values.nombre`, que es lo único que conoce el resto del sistema. En
+  // modo editar arrancan separando `values.nombre` (nombre_completo ya
+  // guardado) por el primer espacio — el componente se remonta fresco cada
+  // vez que se abre "Editar datos" (ver TrabajadorDetallePage), así que
+  // este split solo corre una vez, no en cada tecla.
+  const [nombre, setNombre] = useState(() => {
+    if (modo !== 'editar' || !values.nombre) return ''
+    return values.nombre.trim().split(/\s+/)[0] ?? ''
+  })
+  const [apellido, setApellido] = useState(() => {
+    if (modo !== 'editar' || !values.nombre) return ''
+    return values.nombre.trim().split(/\s+/).slice(1).join(' ')
+  })
+  const nombreValido   = NOMBRE_RE.test(nombre.trim())
+  const apellidoValido = NOMBRE_RE.test(apellido.trim())
   const telefonoValido = values.telefono?.length >= 9 && values.telefono?.length <= 15
   const tarifaValida   = parseFloat(values.tarifa_hora) > 0
 
@@ -41,9 +51,7 @@ export default function FormTrabajador({
     onChange('nombre')({ target: { value: `${n.trim()} ${a.trim()}` } })
   }
 
-  const canSubmit = modo === 'crear'
-    ? nombreValido && apellidoValido && telefonoValido && tarifaValida
-    : telefonoValido && tarifaValida
+  const canSubmit = nombreValido && apellidoValido && telefonoValido && tarifaValida
 
   return (
     <div className="space-y-3">
@@ -53,27 +61,23 @@ export default function FormTrabajador({
         </div>
       )}
 
-      {modo === 'crear' && (
-        <>
-          <Input
-            label="Nombre"
-            placeholder="Ej: Juan"
-            value={nombre}
-            onChange={(e) => { setNombre(e.target.value); actualizarNombreCompleto(e.target.value, apellido) }}
-          />
-          {nombre && !nombreValido && (
-            <p className="text-danger text-[11px] -mt-2">Solo letras, mínimo 4.</p>
-          )}
-          <Input
-            label="Apellido"
-            placeholder="Ej: Pérez"
-            value={apellido}
-            onChange={(e) => { setApellido(e.target.value); actualizarNombreCompleto(nombre, e.target.value) }}
-          />
-          {apellido && !apellidoValido && (
-            <p className="text-danger text-[11px] -mt-2">Solo letras, mínimo 4.</p>
-          )}
-        </>
+      <Input
+        label="Nombre"
+        placeholder="Ej: Juan"
+        value={nombre}
+        onChange={(e) => { setNombre(e.target.value); actualizarNombreCompleto(e.target.value, apellido) }}
+      />
+      {nombre && !nombreValido && (
+        <p className="text-danger text-[11px] -mt-2">Solo letras.</p>
+      )}
+      <Input
+        label="Apellido"
+        placeholder="Ej: Pérez"
+        value={apellido}
+        onChange={(e) => { setApellido(e.target.value); actualizarNombreCompleto(nombre, e.target.value) }}
+      />
+      {apellido && !apellidoValido && (
+        <p className="text-danger text-[11px] -mt-2">Solo letras.</p>
       )}
 
       <Input
