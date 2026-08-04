@@ -12,7 +12,7 @@ import Modal         from '../../components/ui/Modal.jsx'
 
 import { useAuthStore } from '../../store/authStore.js'
 import { logout } from '../../lib/api/auth.js'
-import { getJornadasDelDia, reabrirJornadaFurgonetaDia, eliminarJornadasCentralDia, actualizarJornadaTrabajador } from '../../lib/api/records.js'
+import { getJornadasDelDia, reabrirJornadaFurgonetaDia, eliminarJornadasCentral, actualizarJornadaTrabajador } from '../../lib/api/records.js'
 import { useRealtime } from '../../hooks/useRealtime.js'
 
 //IMPORTACIÓN IMPORTANTE:  Direccion de constants.js : Para el uso de direcciones
@@ -36,13 +36,20 @@ export default function ReporteDiarioPage() {
   // día completo al volver a cerrarlo. Solo disponible para el día de
   // hoy — la RPC también lo exige del lado del servidor.
   //
-  // El mismo modal también cubre "eliminar fila de Central" (esCentral):
-  // ahí no hay furgoneta ni encargado que reabrir, así que es un borrado
-  // directo de esas jornada_empleado — disponible para cualquier fecha,
-  // ya que "Agregar Horas" permite altas retroactivas.
-  const [grupoABorrar, setGrupoABorrar] = useState(null) // { encargado, vehiculo, empleados, esCentral }
+  // El mismo modal también cubre "eliminar seleccionados de Central"
+  // (esCentral): ahí no hay furgoneta ni encargado que reabrir, así que es
+  // un borrado directo de jornada_empleado — pero, a diferencia de
+  // furgonetas, NUNCA borra a todos de un golpe: el admin marca con
+  // checkboxes exactamente a quién quiere eliminar (seleccionCentral) y
+  // solo esos ids se mandan a la RPC.
+  const [grupoABorrar, setGrupoABorrar] = useState(null) // { encargado, vehiculo, empleados, esCentral, seleccionIds? }
   const [borrando, setBorrando]         = useState(false)
   const [borrarError, setBorrarError]   = useState(null)
+  // Los checkboxes de Central solo se muestran tras activar este modo con
+  // el botón de basura del header — así la vista normal no queda llena de
+  // casillas todo el tiempo, solo cuando el admin realmente va a eliminar.
+  const [modoSeleccionCentral, setModoSeleccionCentral] = useState(false)
+  const [seleccionCentral, setSeleccionCentral] = useState(new Set())
 
   // Edición de horas/destajo por jornada — mismo mecanismo que
   // TrabajadorDetallePage (actualizarJornadaTrabajador ya exige
@@ -101,6 +108,21 @@ export default function ReporteDiarioPage() {
 
   useEffect(() => { cargar() }, [cargar])
 
+  // La selección de "a quién eliminar" en Central es propia de cada fecha
+  // vista — cambiar de día la limpia y cierra el modo. No se resetea en
+  // cada recarga realtime (solo en cambio explícito de fecha) para no
+  // borrarle al admin una selección en curso por un cambio ajeno en otra
+  // furgoneta.
+  useEffect(() => { setModoSeleccionCentral(false); setSeleccionCentral(new Set()) }, [fecha])
+
+  const toggleSeleccionCentral = (id) => {
+    setSeleccionCentral((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
   // Realtime: recargar ante cualquier cambio (alta, edición de horas/
   // destajo, o el borrado del "rehacer furgoneta") — antes solo escuchaba
   // INSERT, así que una edición hecha desde otra pestaña no se reflejaba.
@@ -137,7 +159,9 @@ export default function ReporteDiarioPage() {
     setBorrando(true); setBorrarError(null)
     try {
       if (grupoABorrar.esCentral) {
-        await eliminarJornadasCentralDia(fecha)
+        await eliminarJornadasCentral(grupoABorrar.seleccionIds)
+        setModoSeleccionCentral(false)
+        setSeleccionCentral(new Set())
       } else {
         await reabrirJornadaFurgonetaDia({
           encargadoId: grupoABorrar.encargado.id,
@@ -186,19 +210,35 @@ export default function ReporteDiarioPage() {
                     <p className="font-semibold text-sm">Encargado: {grupo.encargado?.nombre ?? '—'}</p>
                     <p className="text-xs text-gray-300">Vehículo: {grupo.vehiculo?.nombre ?? '—'}</p>
                   </div>
-                  {/* Furgonetas: solo si el encargado y el vehículo siguen
-                      activos (no dados de baja) y la fecha vista es hoy —
-                      mismo requisito que valida la RPC del lado del
-                      servidor. Central: cualquier fecha, ya que "Agregar
-                      Horas" permite altas retroactivas y esta es la única
-                      forma de corregir una fila mal creada en el pasado. */}
-                  {(grupo.esCentral || (grupo.encargado?.id && grupo.vehiculo?.id && fecha === hoy())) && (
+                  {/* Furgonetas: borrado atómico de todo el grupo (reabre
+                      cupo + sesión del encargado) — solo si el encargado y
+                      el vehículo siguen activos y la fecha vista es hoy,
+                      mismo requisito que valida la RPC. */}
+                  {!grupo.esCentral && grupo.encargado?.id && grupo.vehiculo?.id && fecha === hoy() && (
                     <button
                       onClick={() => { setBorrarError(null); setGrupoABorrar(grupo) }}
                       className="text-gray-300 hover:text-danger active:scale-90 transition-transform duration-160 shrink-0"
-                      title={grupo.esCentral ? 'Eliminar registros de Central de este día' : 'Rehacer registro de esta furgoneta'}
+                      title="Rehacer registro de esta furgoneta"
                     >
                       <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                  {/* Central: el botón solo activa/desactiva el modo de
+                      selección — los checkboxes por empleado no aparecen
+                      hasta que se pulsa aquí, y desactivarlo limpia lo ya
+                      marcado. Nunca borra "todos de un golpe" solo. */}
+                  {grupo.esCentral && (
+                    <button
+                      onClick={() => {
+                        setModoSeleccionCentral((m) => !m)
+                        setSeleccionCentral(new Set())
+                      }}
+                      className={`active:scale-90 transition-transform duration-160 shrink-0 ${
+                        modoSeleccionCentral ? 'text-danger' : 'text-gray-300 hover:text-danger'
+                      }`}
+                      title={modoSeleccionCentral ? 'Cancelar selección' : 'Elegir empleados a eliminar'}
+                    >
+                      {modoSeleccionCentral ? <X className="w-4 h-4" /> : <Trash2 className="w-4 h-4" />}
                     </button>
                   )}
                 </div>
@@ -216,16 +256,30 @@ export default function ReporteDiarioPage() {
                     const editing = editandoJornadaId === emp.id
                     return (
                       <div key={emp.id} className="grid grid-cols-[1fr_3rem_4rem_2rem] gap-3 items-center border-b border-gray-100 py-1.5 text-sm">
-                        <span className="min-w-0">
-                          <span className={`truncate block ${emp.fue_liquidado ? 'text-gray-400' : 'text-navy-dark'}`}>
-                            {emp.empleado?.nombre ?? '—'}
-                          </span>
-                          {emp.fue_liquidado && (
-                            <span className="text-[9px] font-semibold text-primary uppercase block">
-                              Pagado
-                            </span>
+                        <span className="min-w-0 flex items-center gap-2">
+                          {/* Solo visible tras activar el modo de
+                              selección con el botón del header — para
+                              elegir exactamente a quién eliminar, nunca
+                              "todos de un golpe". No aparece si ya se
+                              liquidó (no se puede borrar de todas formas). */}
+                          {grupo.esCentral && modoSeleccionCentral && !emp.fue_liquidado && (
+                            <input
+                              type="checkbox"
+                              checked={seleccionCentral.has(emp.id)}
+                              onChange={() => toggleSeleccionCentral(emp.id)}
+                              className="shrink-0 w-3.5 h-3.5 accent-danger"
+                            />
                           )}
-                          
+                          <span className="min-w-0">
+                            <span className={`truncate block ${emp.fue_liquidado ? 'text-gray-400' : 'text-navy-dark'}`}>
+                              {emp.empleado?.nombre ?? '—'}
+                            </span>
+                            {emp.fue_liquidado && (
+                              <span className="text-[9px] font-semibold text-primary uppercase block">
+                                Pagado
+                              </span>
+                            )}
+                          </span>
                         </span>
 
                         {editing ? (
@@ -276,6 +330,22 @@ export default function ReporteDiarioPage() {
                       </div>
                     )
                   })}
+
+                  {/* Solo aparece si hay al menos un checkbox marcado —
+                      elimina exactamente los elegidos, nunca todo el grupo. */}
+                  {grupo.esCentral && seleccionCentral.size > 0 && (
+                    <Button
+                      variant="outline"
+                      icon={<Trash2 className="w-3.5 h-3.5" />}
+                      className="!border-danger !text-danger hover:!bg-danger hover:!text-white !mt-2 !py-2 !text-xs"
+                      onClick={() => {
+                        setBorrarError(null)
+                        setGrupoABorrar({ ...grupo, seleccionIds: [...seleccionCentral] })
+                      }}
+                    >
+                      ELIMINAR SELECCIONADOS ({seleccionCentral.size})
+                    </Button>
+                  )}
                 </div>
               </div>
             ))
@@ -284,9 +354,10 @@ export default function ReporteDiarioPage() {
       </div>
 
       {/* ── Confirmar "rehacer" una furgoneta (borra jornada_empleado +
-          jornada_furgoneta de hoy, sin tocar temporales) o "eliminar fila
-          de Central" (borrado directo de jornada_empleado origen='central'
-          de la fecha vista, cualquier día). ── */}
+          jornada_furgoneta de hoy, sin tocar temporales) o "eliminar
+          seleccionados de Central" (borrado directo de las jornada_empleado
+          que el admin marcó con checkbox — nunca todo el grupo de un
+          golpe). ── */}
       <Modal
         open={!!grupoABorrar}
         title={grupoABorrar?.esCentral ? 'Eliminar registros de Central' : 'Rehacer registro de furgoneta'}
@@ -295,11 +366,17 @@ export default function ReporteDiarioPage() {
         {grupoABorrar && (
           <>
             {grupoABorrar.esCentral ? (
-              <p className="text-sm text-navy-dark mb-2">
-                Se eliminarán <strong>{grupoABorrar.empleados.length}</strong> registro(s)
-                creados desde Central ("Agregar Horas") para el{' '}
-                <strong>{fecha}</strong>.
-              </p>
+              <div className="text-sm text-navy-dark mb-2">
+                <p className="mb-2">
+                  Se eliminarán los siguientes <strong>{grupoABorrar.seleccionIds.length}</strong> registro(s)
+                  creados desde Central ("Agregar Horas") para el <strong>{fecha}</strong>:
+                </p>
+                <ul className="text-xs list-disc list-inside space-y-0.5 text-gray-600 max-h-32 overflow-y-auto">
+                  {grupoABorrar.empleados
+                    .filter((e) => grupoABorrar.seleccionIds.includes(e.id))
+                    .map((e) => <li key={e.id}>{e.empleado?.nombre ?? '—'}</li>)}
+                </ul>
+              </div>
             ) : (
               <p className="text-sm text-navy-dark mb-2">
                 Se eliminarán <strong>{grupoABorrar.empleados.length}</strong> registro(s) de
