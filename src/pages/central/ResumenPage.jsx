@@ -517,9 +517,18 @@ export default function ResumenPage() {
       e.jornadas.forEach((j) => { porDia[j.fecha] = j })
       return [
         e.nombre,
+        // Igual que en la planilla (ver CeldaDia): horas y destajo no son
+        // excluyentes, así que un día con ambos no puede reducirse a un
+        // solo número — se combina en texto. Un día solo-horas se deja
+        // como Number (formato original pedido) para no romper sumas que
+        // el usuario arme en la hoja.
         ...diasDelPeriodo.map((d) => {
           const j = porDia[d.iso]
-          return j ? Number(j.horas) : ''
+          if (!j) return ''
+          const horas = Number(j.horas)
+          const destajo = Number(j.destajo)
+          if (destajo > 0) return horas > 0 ? `${horas}h + €${destajo.toFixed(0)}` : `€${destajo.toFixed(0)}`
+          return horas > 0 ? horas : ''
         }),
       ]
     })
@@ -1017,6 +1026,25 @@ function sumarHorasPorTarifa(jornadas, tarifaFallback) {
   return (jornadas ?? []).reduce((s, j) => s + Number(j.horas) * (j.tarifa ?? tarifaFallback ?? 0), 0)
 }
 
+// Celda de un día en la planilla / lista imprimible. FormJornada no hace
+// horas y destajo excluyentes entre sí (un jornalero puede tener ambos el
+// mismo día) — antes esta celda mostraba solo uno de los dos y el otro se
+// perdía sin avisar. Ahora se apilan en dos líneas cuando coexisten; el
+// rosa del destajo es el mismo que ya usa el encabezado de esa columna,
+// así no hace falta agregar una leyenda para distinguirlos.
+function CeldaDia({ jornada }) {
+  if (!jornada) return null
+  const horas = Number(jornada.horas) > 0 ? fmtHorasMin(jornada.horas) : null
+  const destajo = Number(jornada.destajo) > 0 ? `€${Number(jornada.destajo).toFixed(0)}` : null
+  if (!horas && !destajo) return null
+  return (
+    <>
+      {horas && <div>{horas}</div>}
+      {destajo && <div style={{ color: '#ff1493' }}>{destajo}</div>}
+    </>
+  )
+}
+
 function PlanillaImprimible({ ciclo, periodo, empleados, dias, printVisible }) {
   if (!periodo) return null
 
@@ -1025,26 +1053,26 @@ function PlanillaImprimible({ ciclo, periodo, empleados, dias, printVisible }) {
   let hayFueraDeRango = false
 
   return (
-    <div className={`hidden p-4 ${printVisible ? 'print:block' : ''}`}>
+    <div className={`hidden p-2 planilla-print ${printVisible ? 'print:block' : ''}`}>
       <h1 className="text-center font-bold text-lg mb-1">
         PLANILLA DE HORAS — {periodo.label.toUpperCase()} ({ciclo.toUpperCase()})
       </h1>
       <p className="text-center text-xs text-gray-500 mb-4">
         Generado: {new Date().toLocaleDateString('es-ES')}
       </p>
-      <table className="w-full border-collapse text-[10px]">
+      <table className="w-full border-collapse text-[10px] leading-tight">
         <thead>
           <tr>
-            <th className="border border-gray-400 p-1 text-left" style={{ background: '#ffff00' }}>Nombre</th>
+            <th className="border border-gray-400 p-0.5 text-left" style={{ background: '#ffff00' }}>Nombre</th>
             {dias.map((d) => (
-              <th key={d.iso} className="border border-gray-400 p-1" style={{ background: '#ffff00' }}>{d.label}</th>
+              <th key={d.iso} className="border border-gray-400 p-0.5" style={{ background: '#ffff00' }}>{d.label}</th>
             ))}
             <th className="border border-gray-400 bg-gray-100 p-1">Total(H)</th>
             <th className="border border-gray-400 bg-gray-100 p-1">H×€</th>
-            <th className="border border-gray-400 p-1" style={{ background: '#ff1493', color: '#fff' }}>Destajo</th>
-            <th className="border border-gray-400 p-1" style={{ background: '#add8e6' }}>Total</th>
+            <th className="border border-gray-400 p-0.5" style={{ background: '#ff1493', color: '#fff' }}>Destajo</th>
+            <th className="border border-gray-400 p-0.5" style={{ background: '#add8e6' }}>Total</th>
             <th className="border border-gray-400 bg-gray-100 p-1">Debe</th>
-            <th className="border border-gray-400 p-1" style={{ background: '#1f4e78', color: '#fff' }}>Pagar</th>
+            <th className="border border-gray-400 p-0.5" style={{ background: '#1f4e78', color: '#fff' }}>Pagar</th>
           </tr>
         </thead>
         <tbody>
@@ -1061,35 +1089,35 @@ function PlanillaImprimible({ ciclo, periodo, empleados, dias, printVisible }) {
             if (tieneFueraDeRango) hayFueraDeRango = true
             return (
               <tr key={e.id}>
-                <td className="border border-gray-300 p-1">
+                <td className="border border-gray-300 p-0.5">
                   {e.nombre}{tieneFueraDeRango && ' *'}
                 </td>
                 {dias.map((d) => {
                   const j = porDia[d.iso]
                   return (
-                    <td key={d.iso} className="border border-gray-300 p-1 text-center">
-                      {!j ? '' : j.destajo ? `€${Number(j.destajo).toFixed(0)}` : fmtHorasMin(j.horas)}
+                    <td key={d.iso} className="border border-gray-300 p-0.5 text-center leading-tight">
+                      <CeldaDia jornada={j} />
                     </td>
                   )
                 })}
-                <td className="border border-gray-300 p-1 text-center">{fmtHorasMin(e.totalHoras)}</td>
-                <td className="border border-gray-300 p-1 text-right">€{hPesos.toFixed(2)}</td>
-                <td className="border border-gray-300 p-1 text-right">€{(e.totalDevengado - hPesos).toFixed(2)}</td>
-                <td className="border border-gray-300 p-1 text-right">€{e.totalDevengado.toFixed(2)}</td>
-                <td className="border border-gray-300 p-1 text-right">€{e.totalAdelantos.toFixed(2)}</td>
-                <td className="border border-gray-300 p-1 text-right font-bold">€{e.totalPagar.toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-center">{fmtHorasMin(e.totalHoras)}</td>
+                <td className="border border-gray-300 p-0.5 text-right">€{hPesos.toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-right">€{(e.totalDevengado - hPesos).toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-right">€{e.totalDevengado.toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-right">€{e.totalAdelantos.toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-right font-bold">€{e.totalPagar.toFixed(2)}</td>
               </tr>
             )
           })}
           <tr className="font-bold" style={{ background: '#1f4e78', color: '#fff' }}>
-            <td className="border border-gray-400 p-1">TOTAL</td>
-            {dias.map((d) => <td key={d.iso} className="border border-gray-400 p-1"></td>)}
-            <td className="border border-gray-400 p-1"></td>
-            <td className="border border-gray-400 p-1"></td>
-            <td className="border border-gray-400 p-1"></td>
-            <td className="border border-gray-400 p-1 text-right">€{totalGanado.toFixed(2)}</td>
-            <td className="border border-gray-400 p-1 text-right">€{totalAdelantos.toFixed(2)}</td>
-            <td className="border border-gray-400 p-1 text-right">€{(totalGanado - totalAdelantos).toFixed(2)}</td>
+            <td className="border border-gray-400 p-0.5">TOTAL</td>
+            {dias.map((d) => <td key={d.iso} className="border border-gray-400 p-0.5"></td>)}
+            <td className="border border-gray-400 p-0.5"></td>
+            <td className="border border-gray-400 p-0.5"></td>
+            <td className="border border-gray-400 p-0.5"></td>
+            <td className="border border-gray-400 p-0.5 text-right">€{totalGanado.toFixed(2)}</td>
+            <td className="border border-gray-400 p-0.5 text-right">€{totalAdelantos.toFixed(2)}</td>
+            <td className="border border-gray-400 p-0.5 text-right">€{(totalGanado - totalAdelantos).toFixed(2)}</td>
           </tr>
         </tbody>
       </table>
@@ -1113,7 +1141,7 @@ function ListaPagoImprimible({ lista, items, dias, printVisible }) {
   let totalAdelantos = 0
 
   return (
-    <div className={`hidden p-4 ${printVisible ? 'print:block' : ''}`}>
+    <div className={`hidden p-2 planilla-print ${printVisible ? 'print:block' : ''}`}>
       <h1 className="text-center font-bold text-lg mb-1">
         LISTA DE PAGO — {fmtCorta(lista.periodo_inicio)} al {fmtCorta(lista.periodo_fin)} ({lista.ciclo.toUpperCase()})
       </h1>
@@ -1125,19 +1153,19 @@ function ListaPagoImprimible({ lista, items, dias, printVisible }) {
           Encargado del reparto: <span className="font-semibold">{lista.encargado}</span>
         </p>
       )}
-      <table className="w-full border-collapse text-[10px]">
+      <table className="w-full border-collapse text-[10px] leading-tight">
         <thead>
           <tr>
-            <th className="border border-gray-400 p-1 text-left" style={{ background: '#ffff00' }}>Nombre</th>
+            <th className="border border-gray-400 p-0.5 text-left" style={{ background: '#ffff00' }}>Nombre</th>
             {dias.map((d) => (
-              <th key={d.iso} className="border border-gray-400 p-1" style={{ background: '#ffff00' }}>{d.label}</th>
+              <th key={d.iso} className="border border-gray-400 p-0.5" style={{ background: '#ffff00' }}>{d.label}</th>
             ))}
             <th className="border border-gray-400 bg-gray-100 p-1">Total(H)</th>
             <th className="border border-gray-400 bg-gray-100 p-1">H×€</th>
-            <th className="border border-gray-400 p-1" style={{ background: '#ff1493', color: '#fff' }}>Destajo</th>
-            <th className="border border-gray-400 p-1" style={{ background: '#add8e6' }}>Total</th>
+            <th className="border border-gray-400 p-0.5" style={{ background: '#ff1493', color: '#fff' }}>Destajo</th>
+            <th className="border border-gray-400 p-0.5" style={{ background: '#add8e6' }}>Total</th>
             <th className="border border-gray-400 bg-gray-100 p-1">Debe</th>
-            <th className="border border-gray-400 p-1" style={{ background: '#1f4e78', color: '#fff' }}>Pagar</th>
+            <th className="border border-gray-400 p-0.5" style={{ background: '#1f4e78', color: '#fff' }}>Pagar</th>
           </tr>
         </thead>
         <tbody>
@@ -1150,33 +1178,33 @@ function ListaPagoImprimible({ lista, items, dias, printVisible }) {
             totalAdelantos += Number(it.total_adelantos)
             return (
               <tr key={it.id}>
-                <td className="border border-gray-300 p-1">{it.empleado?.nombre ?? 'Empleado dado de baja'}</td>
+                <td className="border border-gray-300 p-0.5">{it.empleado?.nombre ?? 'Empleado dado de baja'}</td>
                 {dias.map((d) => {
                   const j = porDia[d.iso]
                   return (
-                    <td key={d.iso} className="border border-gray-300 p-1 text-center">
-                      {!j ? '' : j.destajo ? `€${Number(j.destajo).toFixed(0)}` : fmtHorasMin(j.horas)}
+                    <td key={d.iso} className="border border-gray-300 p-0.5 text-center leading-tight">
+                      <CeldaDia jornada={j} />
                     </td>
                   )
                 })}
-                <td className="border border-gray-300 p-1 text-center">{fmtHorasMin(totalHoras)}</td>
-                <td className="border border-gray-300 p-1 text-right">€{hPesos.toFixed(2)}</td>
-                <td className="border border-gray-300 p-1 text-right">€{(Number(it.total_devengado) - hPesos).toFixed(2)}</td>
-                <td className="border border-gray-300 p-1 text-right">€{Number(it.total_devengado).toFixed(2)}</td>
-                <td className="border border-gray-300 p-1 text-right">€{Number(it.total_adelantos).toFixed(2)}</td>
-                <td className="border border-gray-300 p-1 text-right font-bold">€{Number(it.total_pagado).toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-center">{fmtHorasMin(totalHoras)}</td>
+                <td className="border border-gray-300 p-0.5 text-right">€{hPesos.toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-right">€{(Number(it.total_devengado) - hPesos).toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-right">€{Number(it.total_devengado).toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-right">€{Number(it.total_adelantos).toFixed(2)}</td>
+                <td className="border border-gray-300 p-0.5 text-right font-bold">€{Number(it.total_pagado).toFixed(2)}</td>
               </tr>
             )
           })}
           <tr className="font-bold" style={{ background: '#1f4e78', color: '#fff' }}>
-            <td className="border border-gray-400 p-1">TOTAL</td>
-            {dias.map((d) => <td key={d.iso} className="border border-gray-400 p-1"></td>)}
-            <td className="border border-gray-400 p-1"></td>
-            <td className="border border-gray-400 p-1"></td>
-            <td className="border border-gray-400 p-1"></td>
-            <td className="border border-gray-400 p-1 text-right">€{totalGanado.toFixed(2)}</td>
-            <td className="border border-gray-400 p-1 text-right">€{totalAdelantos.toFixed(2)}</td>
-            <td className="border border-gray-400 p-1 text-right">€{(totalGanado - totalAdelantos).toFixed(2)}</td>
+            <td className="border border-gray-400 p-0.5">TOTAL</td>
+            {dias.map((d) => <td key={d.iso} className="border border-gray-400 p-0.5"></td>)}
+            <td className="border border-gray-400 p-0.5"></td>
+            <td className="border border-gray-400 p-0.5"></td>
+            <td className="border border-gray-400 p-0.5"></td>
+            <td className="border border-gray-400 p-0.5 text-right">€{totalGanado.toFixed(2)}</td>
+            <td className="border border-gray-400 p-0.5 text-right">€{totalAdelantos.toFixed(2)}</td>
+            <td className="border border-gray-400 p-0.5 text-right">€{(totalGanado - totalAdelantos).toFixed(2)}</td>
           </tr>
         </tbody>
       </table>
