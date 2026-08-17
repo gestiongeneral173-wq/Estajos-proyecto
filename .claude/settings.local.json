@@ -11,7 +11,20 @@
       "Bash(git add *)",
       "Bash(ls \"C:\\\\Users\\\\NEL224\\\\Downloads\\\\Nueva carpeta\")",
       "Bash(npx vite *)",
-      "Bash(cat \"C:/Users/NEL224/Desktop/DECIMA/.claude/launch.json\" 2>&1; echo \"---\"; find \"C:/Users/NEL224/Desktop\" -maxdepth 3 -iname \"launch.json\" 2>/dev/null)"
+      "Bash(cat \"C:/Users/NEL224/Desktop/DECIMA/.claude/launch.json\" 2>&1; echo \"---\"; find \"C:/Users/NEL224/Desktop\" -maxdepth 3 -iname \"launch.json\" 2>/dev/null)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3100 --max-time 3)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3100/registros --max-time 3)",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'C:\\\\Users\\\\NEL224\\\\Documents\\\\repositorios Github\\\\Estajos-proyecto\\\\proyecto-estajos' -Force | Select-Object Name, Mode, Length | Format-Table -AutoSize\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'C:\\\\Users\\\\NEL224\\\\Documents\\\\repositorios Github\\\\Estajos-proyecto\\\\proyecto-estajos\\\\Documentacion' -Recurse -Directory | Select-Object FullName\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'C:\\\\Users\\\\NEL224\\\\Documents\\\\repositorios Github\\\\Estajos-proyecto\\\\proyecto-estajos\\\\src' -Recurse -Force | Select-Object FullName, Mode | Format-Table -AutoSize\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'C:\\\\Users\\\\NEL224\\\\Documents\\\\repositorios Github\\\\Estajos-proyecto\\\\proyecto-estajos\\\\src' -Recurse -Force | Select-Object FullName | Sort-Object FullName\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8842/estajos-demo-v10-final.html)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3)",
+      "Bash(cp \"C:\\\\Users\\\\NEL224\\\\Downloads\\\\estajos-demo-v10-final.html\" \"C:\\\\Users\\\\NEL224\\\\Downloads\\\\estajos-demo-v10-final.backup.html\")",
+      "Bash(rm \"C:\\\\Users\\\\NEL224\\\\Downloads\\\\estajos-demo-v10-final.backup.html\")",
+      "Read(//tmp/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8842/estajos-demo-v10-final.html --max-time 5)"
     ]
   }
 }

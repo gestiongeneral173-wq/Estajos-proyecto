@@ -191,3 +191,31 @@ input[type="number"] {
     }
   }
 }
+
+/* ─────────────────────────────────────────────────────────
+ *  IMPRESIÓN — planilla / lista de pago (ResumenPage). Único lugar
+ *  de la app que llama a window.print(), así que estas reglas son
+ *  seguras de dejar globales bajo @media print.
+ *  - Margen del navegador (~19mm por defecto) recorta espacio útil
+ *    de sobra en una tabla que ya viene apretada de columnas; 10mm
+ *    devuelve ese espacio sin afectar la legibilidad.
+ *  - page-break-inside: avoid en <tr> evita que una fila quede
+ *    cortada a la mitad justo en el borde de la hoja (una fila
+ *    partida se ve como si hiciera falta más espacio del que
+ *    realmente hace falta).
+ *  - size: landscape fuerza horizontal siempre — la tabla tiene
+ *    muchas columnas (un día por columna) y horizontal le da más
+ *    ancho para que no se aprieten tanto. Sin esto, algunos
+ *    navegadores recuerdan la última orientación que el usuario
+ *    eligió a mano en el diálogo de impresión (de una impresión
+ *    anterior, de otro sitio) y la reusan por default acá también.
+ * ───────────────────────────────────────────────────────── */
+@media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+  .planilla-print tr {
+    page-break-inside: avoid;
+  }
+}
