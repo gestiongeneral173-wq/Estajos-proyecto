@@ -185,7 +185,10 @@ export default function EscanearPage() {
   }
 
   const periodo = periodoPago
-  const totalDias = jornadas.reduce((s, j) => s + (j.horas * (trabajador?.tarifa_hora || 0) + Number(j.destajo)), 0)
+  // Tarifa histórica (snapshot al crearse la jornada, ver mapJornada en
+  // records.js) — no la tarifa actual del trabajador, para no re-cotizar
+  // horas ya trabajadas si la tarifa cambió a mitad de ciclo.
+  const totalDias = jornadas.reduce((s, j) => s + (j.horas * (j.tarifa ?? trabajador?.tarifa_hora ?? 0) + Number(j.destajo)), 0)
   const totalAdelantos = adelantos.reduce((s, a) => s + Number(a.monto), 0)
 
   // Fecha más antigua realmente pendiente — se le pasa a ejecutarPago (el
@@ -501,7 +504,7 @@ function SeccionPagar({ trabajador, periodo, periodoInicioReal, puedePagar, jorn
             <span>{new Date(/T/.test(j.fecha) ? j.fecha : `${j.fecha}T00:00:00`).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}</span>
             <span>{j.horas}</span>
             <span>€{j.destajo}</span>
-            <span className="text-right font-semibold">€{(j.horas * trabajador.tarifa_hora + Number(j.destajo)).toFixed(2)}</span>
+            <span className="text-right font-semibold">€{(j.horas * (j.tarifa ?? trabajador.tarifa_hora) + Number(j.destajo)).toFixed(2)}</span>
           </div>
         ))}
         <div className="grid grid-cols-4 gap-2 p-2 bg-gray-50 border-t border-gray-200 text-xs font-bold text-navy-dark">
