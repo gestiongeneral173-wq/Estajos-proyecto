@@ -434,8 +434,11 @@ export async function getResumenPagos() {
       if (!periodo) return
       const fecha = soloFecha(j.fecha_trabajo)
       if (!fecha || fecha > periodo.fin) return
-      // Tarifa vigente cuando SE CREÓ la jornada, no la actual del empleado.
-      const tarifa = j.tarifa_aplicada ?? e?.pago_x_hora ?? 0
+      // FIX URGENTE (temporal, versión de testeo): usa siempre la tarifa
+      // ACTUAL del empleado, ignorando el snapshot tarifa_aplicada — mismo
+      // criterio que ya se aplicó en getDatosCicloParaPago (paymentLists.js)
+      // y sumarHorasPorTarifa (ResumenPage.jsx).
+      const tarifa = e?.pago_x_hora ?? 0
       resumen[e.tipo_pago] += Number(j.horas_trabajadas || 0) * Number(tarifa) + Number(j.pago_destajo || 0)
     })
   }

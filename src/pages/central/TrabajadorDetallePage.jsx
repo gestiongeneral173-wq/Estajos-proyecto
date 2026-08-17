@@ -563,7 +563,11 @@ export default function TrabajadorDetallePage() {
                 const editing  = editandoJornadaId === j.id
                 // La tarifa histórica (snapshot al crearse la jornada) es la
                 // que de verdad se cobra — no la tarifa actual del empleado.
-                const tarifa   = j.tarifa ?? Number(trabajador.tarifa_hora || 0)
+                // FIX URGENTE (temporal, versión de testeo): usa siempre la
+                // tarifa ACTUAL del trabajador, ignorando el snapshot
+                // tarifa_aplicada — mismo criterio aplicado en
+                // getDatosCicloParaPago, sumarHorasPorTarifa y getResumenPagos.
+                const tarifa   = Number(trabajador.tarifa_hora || 0)
                 const subtotal = Number(j.horas) * tarifa + Number(j.destajo || 0)
                 return (
                   <div key={j.id} className="grid grid-cols-6 gap-1 py-1.5 border-b border-gray-50 last:border-0 items-center">

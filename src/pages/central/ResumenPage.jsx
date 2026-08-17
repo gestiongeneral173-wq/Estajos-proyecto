@@ -1015,15 +1015,13 @@ function fmtHorasMin(h) {
   return `${horas}:${String(min).padStart(2, '0')}`
 }
 
-// Suma horas×tarifa jornada por jornada — cada una con SU tarifa_aplicada
-// histórica (nunca horas totales × tarifa actual del empleado, que puede
-// diferir si la tarifa cambió entre jornadas; más probable ahora que el
-// arrastre puede juntar jornadas de hace tiempo). Mismo criterio que ya usa
-// totalDevengado en getDatosCicloParaPago — así la columna "Destajo"
-// (Total − esto) siempre aísla el destajo real, nunca un residuo de
-// tarifas mal promediadas.
+// FIX URGENTE (temporal, versión de testeo): usa siempre la tarifa ACTUAL
+// del trabajador (pago por hora en la ficha del empleado), ignorando la
+// tarifa_aplicada histórica de cada jornada — el cliente cargó mal el pago
+// por hora y necesita que la planilla recalculé con la tarifa ya corregida
+// sin tener que tocar datos en Supabase.
 function sumarHorasPorTarifa(jornadas, tarifaFallback) {
-  return (jornadas ?? []).reduce((s, j) => s + Number(j.horas) * (j.tarifa ?? tarifaFallback ?? 0), 0)
+  return (jornadas ?? []).reduce((s, j) => s + Number(j.horas) * (tarifaFallback ?? 0), 0)
 }
 
 // Celda de un día en la planilla / lista imprimible. FormJornada no hace
