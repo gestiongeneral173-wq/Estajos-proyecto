@@ -42,11 +42,13 @@ export async function getDatosCicloParaPago(ciclo) {
         getAdelantosPendientes(e.id, null, periodo.fin),
       ])
       const totalHoras   = jornadas.reduce((s, j) => s + Number(j.horas), 0)
-      // Cada jornada usa SU tarifa (snapshot al crearse), no la tarifa
-      // actual del empleado — así coincide con lo que ejecutar_pago_empleado
-      // realmente cobra si hubo un aumento a mitad de ciclo.
+      // FIX URGENTE (temporal, versión de testeo): usa siempre la tarifa
+      // ACTUAL del empleado (e.tarifa_hora), ignorando la tarifa_aplicada
+      // histórica de cada jornada — el cliente cargó mal el pago por hora y
+      // necesita que la Planilla/Lista de Pago recalculen con la tarifa ya
+      // corregida sin tocar datos en Supabase.
       const totalDevengado = jornadas.reduce(
-        (s, j) => s + Number(j.horas) * (j.tarifa ?? e.tarifa_hora ?? 0) + Number(j.destajo), 0
+        (s, j) => s + Number(j.horas) * (e.tarifa_hora ?? 0) + Number(j.destajo), 0
       )
       const totalAdelantos = adelantos.reduce((s, a) => s + Number(a.monto), 0)
 
